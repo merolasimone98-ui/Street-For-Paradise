@@ -2,7 +2,7 @@
 // Ogni interno viene costruito al momento dell'ingresso in una zona remota della mappa e distrutto all'uscita.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { makePerson } from './characters.js';
+import { makePerson, HumanAnimator, randomLook } from './characters.js';
 import { disposeObject3D } from './ui.js';
 import { seededRandom } from './birthdata.js';
 
@@ -170,6 +170,9 @@ export class Interior {
     this.bodies = [];
     this.collidables = [];
     this.animators = [];
+    this.interactables = [];
+    this.seats = [];
+    this.kitchen = null;
     this.time = 0;
 
     const builder = BUILDERS[door.type] || BUILDERS.home;
@@ -186,6 +189,16 @@ export class Interior {
   /** Punto della porta d'uscita (coordinate mondo). */
   get exitPoint() {
     return { x: INTERIOR_ORIGIN.x, z: INTERIOR_ORIGIN.z + this.size.d / 2 - 0.6 };
+  }
+
+  /** Converte coordinate locali dell'interno in coordinate mondo. */
+  toWorld(x, y, z) {
+    return new THREE.Vector3(INTERIOR_ORIGIN.x + x, INTERIOR_ORIGIN.y + y, INTERIOR_ORIGIN.z + z);
+  }
+
+  /** Punto di interazione [E] in coordinate locali. */
+  interact(x, z, label, action, data = {}, radius = 1.7) {
+    this.interactables.push({ x: INTERIOR_ORIGIN.x + x, z: INTERIOR_ORIGIN.z + z, label, action, data, radius });
   }
 
   /* ---------- Helper di costruzione (coordinate locali) ---------- */
@@ -255,17 +268,16 @@ export class Interior {
   }
 
   npc(opts, x, z, rotY = 0) {
-    const p = makePerson({ height: 1.7 + this.rng() * 0.15, ...opts });
+    const base = randomLook(this.rng);
+    const p = makePerson({ ...base, height: 1.66 + this.rng() * 0.18, ...opts });
     p.position.set(x, 0, z);
     p.rotation.y = rotY;
     p.traverse((o) => { if (o.isMesh) o.castShadow = true; });
     this.group.add(p);
     this.addBody(0.6, 1.8, 0.6, x, 0.9, z);
+    const anim = new HumanAnimator(p);
     const phase = this.rng() * 10;
-    this.animators.push((t) => {
-      p.userData.head.rotation.y = Math.sin(t * 0.5 + phase) * 0.45;
-      p.userData.torso.scale.y = 1 + Math.sin(t * 1.8 + phase) * 0.01;
-    });
+    this.animators.push((t, dt) => anim.update(dt, { speed: 0, look: Math.sin(t * 0.4 + phase) * 0.4 }));
     return p;
   }
 
@@ -502,6 +514,9 @@ const BUILDERS = {
       I.box(1.6, 0.9, 0.1, std(0x5a3e2b), bx, 0.65, -d / 2 + 0.1);
       I.box(0.5, 0.5, 0.45, std(0x5a3e2b), bx - 1.15, 0.25, -d / 2 + 0.35, { solid: true });
       I.light(bx - 1.15, 0.75, -d / 2 + 0.35, 0xffd39a, 2.5, { fixture: 'bulb' });
+      I.interact(bx - 1.25, bz + 0.5, 'dormire fino al mattino', 'sleep', { lie: I.toWorld(bx, 0.74, bz + 0.98), facing: 0 }, 1.6);
+    } else {
+      I.interact(-w / 2 + 2.3, 1.2, 'dormire fino al mattino', 'sleep', { lie: I.toWorld(-w / 2 + 1.2, 0.34, 2.15), facing: 0 }, 1.6);
     }
     // Tavolo da pranzo
     I.table(w / 2 - 2.2, d / 2 - 3.0, 1.4, 0.9, tier === 'poor' ? 0x6e5c47 : 0x8a6a4c);
@@ -542,6 +557,7 @@ const BUILDERS = {
     I.box(6.1, 0.05, 0.95, std(0x3f8f80, { roughness: 0.3 }), 0, 1.13, -3);
     I.box(0.5, 0.35, 0.05, std(0x111111), -1.2, 1.35, -3.3);
     I.npc({ skin: I.randomSkin(), shirt: 0xe6f0ee, pants: 0xe6f0ee, hair: 0x2a2018, sex: 'f' }, -0.5, -4.2, 0);
+    I.interact(-0.5, -2.1, 'farti visitare (cure complete $150)', 'hospital', {}, 1.8);
     I.npc({ skin: I.randomSkin(), shirt: 0x3f8f80, pants: 0x3f8f80, hair: 0x1a1410, sex: 'm' }, 1.6, -4.4, -0.3);
     I.sign('ACCETTAZIONE', '#9df5dc', 4, 0.6, 0, 3.2, -d / 2 + 0.02, 0);
     I.sign('PRONTO SOCCORSO  →', '#ff6b6b', 3.6, 0.5, w / 2 - 0.02, 2.8, -3, -Math.PI / 2);
@@ -633,6 +649,7 @@ const BUILDERS = {
     I.box(0.4, 0.3, 0.35, std(0x1f1f22), 4.2, 1.2, 2.6);
     I.box(0.35, 0.22, 0.02, new THREE.MeshBasicMaterial({ color: 0x7dff9a }), 4.2, 1.27, 2.79);
     I.npc({ skin: I.randomSkin(), shirt: 0x2e7d4f, pants: 0x22262e, hair: 0x1b1410, sex: rng() < 0.5 ? 'm' : 'f' }, 4.6, 1.6, 0);
+    I.interact(4.6, 3.6, 'fare acquisti alla cassa', 'shop', { shop: 'market' }, 1.8);
     // Cestini
     for (let i = 0; i < 3; i++) I.box(0.5, 0.35, 0.35, std(0xd62828, { roughness: 0.6 }), 6.2, 0.18 + i * 0.3, 4.6, { solid: i === 0 });
     return { w, d, h };
@@ -676,7 +693,8 @@ const BUILDERS = {
     }
     I.addBody(1.8, 1.1, 0.8, -w / 2 + 1.45, 0.55, 5.5);
     I.npc({ skin: I.randomSkin(), shirt: 0x2b4a6e, pants: 0x2b4a6e, hair: 0x1b1410, sex: 'm' }, 3.8, 3.4, -1.2);
-    I.npc({ skin: I.randomSkin(), shirt: 0xf2f2f2, pants: 0x22262e, hair: 0x2a2018, sex: rng() < 0.5 ? 'm' : 'f' }, -2.5, -0.2, 0.4);
+    I.npc({ skin: I.randomSkin(), shirt: 0xf2f2f2, pants: 0x22262e, hair: 0x2a2018, sex: rng() < 0.5 ? 'm' : 'f', sleeves: 'long' }, -2.5, -0.2, 0.4);
+    I.interact(-2.5, 1.0, 'parlare con il venditore', 'dealer', {}, 1.9);
     return { w, d, h };
   },
 
@@ -718,6 +736,8 @@ const BUILDERS = {
     I.plant(w / 2 - 0.7, -d / 2 + 0.7, 1.4);
     I.box(1.2, 1.1, 0.6, std(0x2a2d31, { metalness: 0.5 }), w / 2 - 0.5, 0.55, -0.5, { solid: true, rotY: -Math.PI / 2 });
     I.box(0.02, 0.4, 0.5, new THREE.MeshBasicMaterial({ color: 0x7fd0ff }), w / 2 - 0.82, 0.85, -0.5);
+    I.interact(0, -1.6, 'andare allo sportello', 'bank', {}, 1.8);
+    I.interact(w / 2 - 1.5, -0.5, 'usare il bancomat', 'atm', {}, 1.3);
     return { w, d, h };
   },
 
@@ -781,8 +801,310 @@ const BUILDERS = {
     const juke = I.box(0.02, 0.9, 0.5, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffb347, emissiveIntensity: 1.2 }), -w / 2 + 1.11, 1.1, 4.2);
     I.animators.push((t) => { juke.material.emissive.setHSL((t * 0.1) % 1, 0.9, 0.55); });
     I.npc({ skin: I.randomSkin(), shirt: 0x111111, pants: 0x1a1a1a, hair: 0x1b1410, sex: rng() < 0.5 ? 'm' : 'f' }, -1.5, -3.7, 0);
+    I.interact(1.6, -1.8, 'ordinare al bancone', 'shop', { shop: 'bar' }, 1.6);
     I.npc({ skin: I.randomSkin(), shirt: 0x5a2d82, pants: 0x22262e, hair: 0x2a2018, sex: 'f' }, -2.6, -1.6, Math.PI);
     I.npc({ skin: I.randomSkin(), shirt: 0x2d6a4f, pants: 0x22262e, hair: 0x1b1410, sex: 'm' }, 2.2, 1.4, 0.4);
     return { w, d, h };
   },
+
+  /* ---------------- RISTORANTE / TRATTORIA ---------------- */
+  restaurant(I, ctx) {
+    return buildDiner(I, ctx, 'restaurant');
+  },
+
+  /* ---------------- PIZZERIA ---------------- */
+  pizzeria(I, ctx) {
+    return buildDiner(I, ctx, 'pizzeria');
+  },
+
+  /* ---------------- FARMACIA ---------------- */
+  pharmacy(I) {
+    const rng = I.rng;
+    const w = 12, d = 11, h = 3.4;
+    const floorTex = TEX.tiles(0xf2f4f3, '#c9d0cc', rng, 8, 3, 3);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, bumpMap: floorTex, bumpScale: 0.4, roughness: 0.15 }), wallMat: std(0xffffff, { map: TEX.plaster(0xf4f8f5, rng, 3, 1), roughness: 0.9 }), trim: 0x2e8b57 });
+    I.ambient(0xf4fff8, 0x9aa5a0, 0.55);
+    for (const [x, z] of [[-3, -1.5], [3, -1.5], [0, 2.5]]) I.light(x, h - 0.2, z, 0xf6fff9, 11, { fixture: 'panel', shadow: x === 0 });
+    // Scaffali a parete con confezioni colorate
+    const shelfMat = std(0xffffff, { roughness: 0.4 });
+    const items = [];
+    for (const side of [-1, 1]) {
+      I.box(0.5, 2.3, 7, shelfMat, side * (w / 2 - 0.25), 1.15, -0.5, { solid: true, shadow: true });
+      for (let lvl = 0; lvl < 5; lvl++) {
+        for (let z = -3.8; z < 2.8; z += 0.22) {
+          if (rng() < 0.15) continue;
+          items.push([side * (w / 2 - 0.55), 0.35 + lvl * 0.42, z, [0x2e8b57, 0xffffff, 0x3a7bd5, 0xe74c3c, 0xf1c40f, 0x9b59b6][Math.floor(rng() * 6)]]);
+        }
+      }
+    }
+    const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.14, 0.2, 0.16), std(0xffffff, { roughness: 0.5 }), items.length);
+    const m4 = new THREE.Matrix4();
+    const col = new THREE.Color();
+    items.forEach(([x, y, z, c], i) => { m4.makeTranslation(x, y, z); inst.setMatrixAt(i, m4); inst.setColorAt(i, col.set(c)); });
+    I.group.add(inst);
+    // Banco con farmacista
+    I.box(6, 1.05, 0.8, std(0x2e8b57, { roughness: 0.35 }), 0, 0.525, -2.6, { solid: true, shadow: true });
+    I.box(6.1, 0.05, 0.9, std(0xf4f4f4, { roughness: 0.2 }), 0, 1.07, -2.6);
+    I.box(0.4, 0.3, 0.3, std(0x1f1f22), -1.5, 1.25, -2.6);
+    I.npc({ shirt: 0xf8f8f8, pants: 0x2b2f38, sleeves: 'long', glasses: true }, 0.4, -3.5, 0);
+    I.sign('✚ FARMACIA', '#5dff8a', 3.2, 0.7, 0, h - 0.6, -d / 2 + 0.03, 0, 'rgba(6,30,14,0.95)');
+    I.plant(w / 2 - 0.9, d / 2 - 0.9, 1.1);
+    I.interact(0.4, -1.4, 'parlare con il farmacista', 'shop', { shop: 'pharmacy' }, 1.8);
+    return { w, d, h };
+  },
+
+  /* ---------------- ARMERIA ---------------- */
+  weapons(I) {
+    const rng = I.rng;
+    const w = 12, d = 10, h = 3.4;
+    const floorTex = TEX.wood(0x3d2a1e, rng, 2, 2);
+    const wallTex = TEX.concrete(0x6f6a62, rng, 3, 1, 4);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, bumpMap: floorTex, bumpScale: 0.6, roughness: 0.6 }), wallMat: std(0xffffff, { map: wallTex, bumpMap: wallTex, bumpScale: 0.6, roughness: 0.9 }), ceilMat: std(0x2a2826), trim: 0x1d1b19 });
+    I.ambient(0xffe6c8, 0x2a2420, 0.3);
+    for (const x of [-3, 0, 3]) I.light(x, h - 0.6, -1.5, 0xffe2b8, 9, { fixture: 'pendant', shadow: x === 0 });
+    // Bancone vetrina
+    const glass = new THREE.MeshPhysicalMaterial({ color: 0xdfefff, roughness: 0.05, transparent: true, opacity: 0.25, depthWrite: false });
+    I.box(7, 0.7, 0.8, std(0x2a2522, { roughness: 0.4 }), 0, 0.35, -2.2, { solid: true, shadow: true });
+    I.box(7, 0.35, 0.8, glass, 0, 0.88, -2.2, { solid: true });
+    for (let i = 0; i < 6; i++) I.box(0.5, 0.05, 0.18, std(0x1c1d20, { metalness: 0.7, roughness: 0.35 }), -2.8 + i * 1.1, 0.75, -2.2);
+    // Rastrelliera a parete (sagome)
+    const steel = std(0x1c1d20, { metalness: 0.75, roughness: 0.35 });
+    const woodStock = std(0x6b4423, { roughness: 0.5 });
+    I.box(8, 2, 0.08, std(0x3a2f26), 0, 1.9, -d / 2 + 0.05);
+    for (let i = 0; i < 7; i++) {
+      I.box(1.2, 0.07, 0.05, steel, -3.2 + i * 1.05, 2.4, -d / 2 + 0.12).rotation.z = 0.08;
+      I.box(0.35, 0.12, 0.05, woodStock, -3.7 + i * 1.05, 2.36, -d / 2 + 0.12);
+      I.box(0.5, 0.05, 0.05, steel, -3.2 + i * 1.05, 1.6, -d / 2 + 0.12);
+    }
+    // Armadietto attrezzi aperto con il cacciavite speciale
+    I.box(1.2, 2, 0.6, std(0x55606b, { metalness: 0.6, roughness: 0.4 }), w / 2 - 0.7, 1, 1.5, { solid: true, shadow: true });
+    const doorL = I.box(0.04, 1.9, 0.6, std(0x5f6b77, { metalness: 0.6, roughness: 0.4 }), w / 2 - 1.35, 1, 1.9);
+    doorL.rotation.y = -0.9;
+    I.box(0.25, 0.04, 0.04, std(0xd69e2e), w / 2 - 0.75, 1.2, 1.25);
+    I.box(0.12, 0.012, 0.012, std(0xc9ced3, { metalness: 0.95 }), w / 2 - 0.56, 1.2, 1.25);
+    I.npc({ shirt: 0x4b5a35, pants: 0x2b2b2e, beard: true, sex: 'm', sleeves: 'long' }, 0.5, -3.1, 0);
+    I.sign('ARMERIA · PORTO D\'ARMI OBBLIGATORIO', '#ff9a4a', 4.6, 0.45, 0, h - 0.4, -d / 2 + 0.03, 0, 'rgba(24,14,8,0.95)');
+    I.interact(0.5, -1.2, 'parlare con l\'armaiolo', 'shop', { shop: 'weapons' }, 1.8);
+    I.interact(w / 2 - 1.6, 1.5, 'aprire l\'armadietto attrezzi', 'shop', { shop: 'weapons' }, 1.4);
+    return { w, d, h };
+  },
+
+  /* ---------------- BOUTIQUE ABBIGLIAMENTO ---------------- */
+  clothing(I) {
+    const rng = I.rng;
+    const w = 16, d = 12, h = 3.6;
+    const floorTex = TEX.wood(0xc9a77c, rng, 3, 2);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, bumpMap: floorTex, bumpScale: 0.5, roughness: 0.35 }), wallMat: std(0xffffff, { map: TEX.plaster(0xf3eee8, rng, 3, 1), roughness: 0.9 }), trim: 0xb89870 });
+    I.ambient(0xfff6ee, 0x8a7a6a, 0.5);
+    for (const x of [-5, 0, 5]) for (const z of [-2.5, 1.5]) I.light(x, h - 0.2, z, 0xfff3e2, 6, { fixture: 'panel', shadow: x === 0 && z === -2.5 });
+    const chrome = std(0xd0d4d8, { metalness: 0.95, roughness: 0.2 });
+    const colors = [0xeeeeea, 0x1d1e22, 0x9a2224, 0x1f2f55, 0x9cc3e6, 0x4b5a35, 0x2a1c16, 0xd97a2b];
+    // Stender con capi appesi
+    for (const [rx, rz] of [[-5, -2], [-5, 1.5], [5, -2], [5, 1.5]]) {
+      I.box(2.4, 0.04, 0.04, chrome, rx, 1.65, rz);
+      I.box(0.04, 1.65, 0.04, chrome, rx - 1.2, 0.825, rz);
+      I.box(0.04, 1.65, 0.04, chrome, rx + 1.2, 0.825, rz);
+      for (let i = 0; i < 9; i++) {
+        const shirt = I.box(0.05, 0.75, 0.55, std(colors[Math.floor(rng() * colors.length)], { roughness: 1 }), rx - 1.0 + i * 0.25, 1.25, rz);
+        shirt.rotation.y = Math.PI / 2 + (rng() - 0.5) * 0.2;
+      }
+      I.addBody(2.5, 1.8, 0.7, rx, 0.9, rz);
+    }
+    // Scaffale scarpe e accessori
+    I.box(4, 1.8, 0.45, std(0xb89870, { roughness: 0.5 }), 0, 0.9, -d / 2 + 0.25, { solid: true });
+    for (let lvl = 0; lvl < 3; lvl++) for (let i = 0; i < 8; i++) {
+      I.box(0.3, 0.12, 0.25, std([0xf0f0ee, 0x1a1a1c, 0x4a2f1c, 0x5a3a24][(i + lvl) % 4], { roughness: 0.5 }), -1.75 + i * 0.5, 0.5 + lvl * 0.55, -d / 2 + 0.35);
+    }
+    // Manichini
+    for (const [mx, mz, c] of [[-2, -3.5, 0x2a1c16], [2, -3.5, 0x9cc3e6]]) {
+      const m = makePerson({ height: 1.8, skin: 0xe9e5df, hair: 0xe9e5df, hairStyle: 'bald', shirt: c, sleeves: 'long', pants: 0x1c1d22, shoes: 0x1a1a1c });
+      m.position.set(mx, 0.1, mz);
+      m.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      I.group.add(m);
+      I.box(0.6, 0.1, 0.6, std(0xd0d4d8, { metalness: 0.8 }), mx, 0.05, mz, { solid: true });
+    }
+    // Specchio e camerino
+    const mirror = I.box(1.2, 2.2, 0.04, new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.02 }), -w / 2 + 0.05, 1.3, 3.2);
+    mirror.rotation.y = Math.PI / 2;
+    I.box(0.08, 2.4, 1.5, std(0x8a3b5a, { roughness: 1 }), -w / 2 + 1.6, 1.2, 4.3);
+    // Cassa
+    I.box(2.4, 1.0, 0.8, std(0xf3eee8, { roughness: 0.3 }), w / 2 - 2, 0.5, 3.6, { solid: true, shadow: true });
+    I.npc({ shirt: 0x1d1e22, pants: 0x1d1e22, sex: 'f', hairStyle: 'bun', sleeves: 'long' }, w / 2 - 2, 4.4, Math.PI);
+    I.sign('BOUTIQUE · NUOVA COLLEZIONE', '#3a2a4a', 4.4, 0.5, 0, h - 0.4, -d / 2 + 0.03, 0, 'rgba(250,246,240,0.95)');
+    I.interact(w / 2 - 2, 2.6, 'comprare vestiti e accessori', 'shop', { shop: 'clothing' }, 1.8);
+    I.interact(-w / 2 + 1.0, 3.2, 'cambiarti allo specchio', 'wardrobe', {}, 1.5);
+    return { w, d, h };
+  },
+
+  /* ---------------- CHIESA ---------------- */
+  church(I) {
+    const rng = I.rng;
+    const w = 16, d = 24, h = 9;
+    const floorTex = TEX.marble(rng, 4, 6);
+    const stoneTex = TEX.concrete(0xd9cfbd, rng, 4, 2, 2);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, roughness: 0.2 }), wallMat: std(0xffffff, { map: stoneTex, bumpMap: stoneTex, bumpScale: 0.8, roughness: 0.9 }), ceilMat: std(0x3a2e26, { roughness: 1 }), trim: 0x6b5232 });
+    I.ambient(0xfff0d8, 0x5a4a3a, 0.35);
+    for (const z of [-8, -1, 6]) I.light(0, h - 1.5, z, 0xffdcae, 26, { fixture: 'pendant', shadow: z === -8 });
+    // Vetrate colorate
+    const stainColors = [0x3a5bd9, 0xd93a5b, 0xd9b23a, 0x3ad98f, 0x9b3ad9];
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        const c = stainColors[(i + (side > 0 ? 2 : 0)) % stainColors.length];
+        const win = I.mesh(new THREE.PlaneGeometry(1.4, 3.6), new THREE.MeshBasicMaterial({ color: c, toneMapped: false }), side * (w / 2 - 0.02), 4.8, -8 + i * 5);
+        win.rotation.y = -side * Math.PI / 2;
+      }
+    }
+    // Panche
+    const pewMat = std(0x5a3a24, { roughness: 0.55 });
+    for (let r = 0; r < 6; r++) {
+      for (const sx of [-1, 1]) {
+        const x = sx * 3.6, z = -4 + r * 2;
+        I.box(4.6, 0.08, 0.5, pewMat, x, 0.46, z);
+        I.box(4.6, 0.6, 0.08, pewMat, x, 0.8, z + 0.25);
+        I.box(0.08, 0.46, 0.5, pewMat, x - 2.25, 0.23, z);
+        I.box(0.08, 0.46, 0.5, pewMat, x + 2.25, 0.23, z);
+        I.addBody(4.6, 1.1, 0.6, x, 0.55, z + 0.05);
+      }
+    }
+    // Presbiterio, altare e croce
+    I.box(10, 0.4, 4, std(0xe8e0d0, { roughness: 0.3 }), 0, 0.2, -d / 2 + 2.2, { solid: true });
+    I.box(2.6, 1.0, 1.0, std(0xf4efe4, { roughness: 0.3 }), 0, 0.9, -d / 2 + 2.4, { solid: true, shadow: true });
+    I.box(2.8, 0.05, 1.1, std(0xffffff, { roughness: 0.9 }), 0, 1.42, -d / 2 + 2.4);
+    const gold = std(0xd6a73a, { metalness: 0.95, roughness: 0.25 });
+    I.box(0.25, 3.2, 0.2, gold, 0, 5.2, -d / 2 + 0.2);
+    I.box(1.7, 0.25, 0.2, gold, 0, 6.0, -d / 2 + 0.2);
+    // Candelabro votivo con candele tremolanti
+    const flames = [];
+    I.box(1.4, 0.9, 0.5, std(0x3a2e26), 4.5, 0.45, -d / 2 + 4.2, { solid: true });
+    const flameMat = new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffa040, emissiveIntensity: 2.2 });
+    for (let i = 0; i < 9; i++) {
+      const cx = 3.95 + (i % 5) * 0.27, cz = -d / 2 + 4.05 + Math.floor(i / 5) * 0.25;
+      I.mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.14, 8), std(0xf8f4e8), cx, 0.97, cz);
+      flames.push(I.mesh(new THREE.ConeGeometry(0.018, 0.05, 6), flameMat, cx, 1.07, cz));
+    }
+    const candleLight = new THREE.PointLight(0xffa040, 3, 6, 2);
+    candleLight.position.set(4.5, 1.3, -d / 2 + 4.2);
+    I.group.add(candleLight);
+    I.animators.push((t) => {
+      candleLight.intensity = 2.6 + Math.sin(t * 13) * 0.4 + Math.sin(t * 7.3) * 0.3;
+      flames.forEach((f, i) => { f.scale.y = 1 + Math.sin(t * 15 + i) * 0.2; });
+    });
+    I.npc({ shirt: 0x111111, pants: 0x111111, sleeves: 'long', sex: 'm', hair: 0x9a9a9a }, -1.6, -d / 2 + 3.4, 0.3);
+    I.interact(0, -d / 2 + 4.6, 'pregare davanti all\'altare', 'pray', {}, 2.0);
+    I.interact(4.5, -d / 2 + 5.2, 'accendere una candela (offerta $2)', 'candle', {}, 1.5);
+    return { w, d, h };
+  },
+
+  /* ---------------- STAZIONE DI POLIZIA ---------------- */
+  police(I) {
+    const rng = I.rng;
+    const w = 16, d = 12, h = 3.4;
+    const floorTex = TEX.tiles(0xb9bcc0, '#8a8d91', rng, 8, 3, 3);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, bumpMap: floorTex, bumpScale: 0.4, roughness: 0.4 }), wallMat: std(0xffffff, { map: TEX.plaster(0xd6dde6, rng, 3, 1), roughness: 0.9 }), trim: 0x1b2a4a });
+    I.ambient(0xeef4ff, 0x7a808a, 0.5);
+    for (const x of [-4, 0, 4]) I.light(x, h - 0.2, -1, 0xeef6ff, 10, { fixture: 'panel', shadow: x === 0 });
+    I.box(5, 1.15, 0.9, std(0x1b2a4a, { roughness: 0.4 }), 0, 0.575, -2, { solid: true, shadow: true });
+    I.box(5.1, 0.05, 1.0, std(0xe9e9e9, { roughness: 0.3 }), 0, 1.17, -2);
+    I.npc({ uniform: 'police', shirt: 0x2c4a7a, pants: 0x1b2a4a, sleeves: 'long' }, 0.3, -3, 0);
+    I.sign('POLIZIA · ACCETTAZIONE DENUNCE', '#8fc0ff', 4.2, 0.45, 0, h - 0.4, -d / 2 + 0.03, 0, 'rgba(10,20,50,0.95)');
+    // Celle
+    const bars = std(0x4a4f57, { metalness: 0.8, roughness: 0.35 });
+    for (let i = 0; i < 14; i++) I.box(0.05, h, 0.05, bars, -w / 2 + 0.4 + i * 0.3, h / 2, -d / 2 + 3.2);
+    I.addBody(4.4, h, 0.2, -w / 2 + 2.35, h / 2, -d / 2 + 3.2);
+    I.box(1.9, 0.4, 0.8, std(0x6b6f75), -w / 2 + 1.2, 0.2, -d / 2 + 1, { solid: true });
+    // Panche d'attesa e bacheca
+    for (const x of [3.5, 5.5]) {
+      I.box(1.8, 0.08, 0.5, std(0x5a6270, { metalness: 0.5 }), x, 0.46, 3.5);
+      I.addBody(1.8, 0.9, 0.5, x, 0.45, 3.5);
+    }
+    const posters = I.mesh(new THREE.PlaneGeometry(2.4, 1.2), std(0xf1ead8, { roughness: 1 }), w / 2 - 0.02, 1.7, 0);
+    posters.rotation.y = -Math.PI / 2;
+    I.interact(0.3, -1.0, 'parlare con l\'agente', 'police', {}, 1.8);
+    return { w, d, h };
+  },
 };
+
+/** Ristorante/pizzeria: tavoli con sedie (posti a sedere interattivi), cucina e decorazioni. */
+function buildDiner(I, ctx, kind) {
+  const rng = I.rng;
+  const pizza = kind === 'pizzeria';
+  const w = 16, d = 14, h = 3.6;
+  const floorTex = pizza ? TEX.tiles((x, y) => ((x + y) % 2 ? 0xd9cdb4 : 0x9b3b2b), '#6b5a48', rng, 10, 3, 3) : TEX.wood(0x6b4a30, rng, 3, 2);
+  const wallTex = pizza ? TEX.brick(rng, 4, 1.5) : TEX.plaster(0xead9bd, rng, 3, 1);
+  I.room({
+    w, d, h,
+    floorMat: std(0xffffff, { map: floorTex, bumpMap: floorTex, bumpScale: 0.5, roughness: pizza ? 0.4 : 0.5 }),
+    wallMat: std(0xffffff, { map: wallTex, bumpMap: pizza ? wallTex : null, bumpScale: 1, roughness: 0.9 }),
+    ceilMat: std(pizza ? 0x2b231d : 0x4a3a2c, { roughness: 1 }),
+    trim: 0x3a2618,
+  });
+  I.ambient(0xffe6c8, 0x3a2a1e, 0.35);
+  // Boiserie
+  if (!pizza) for (const side of [-1, 1]) I.box(0.04, 1.0, d, std(0x5a3a24, { roughness: 0.5 }), side * (w / 2 - 0.02), 0.5, 0);
+  // Cucina sul fondo: passe con luce calda
+  I.box(6, 1.1, 0.7, std(0x3a2618, { roughness: 0.4 }), -3.5, 0.55, -d / 2 + 0.6, { solid: true });
+  I.box(6, 1.1, 0.04, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffc078, emissiveIntensity: 0.5 }), -3.5, 2.0, -d / 2 + 0.05);
+  I.box(1.2, 2.3, 0.08, std(0x8a6a4a), 2.2, 1.15, -d / 2 + 0.06);
+  I.sign(pizza ? 'PIZZERIA VESUVIO · FORNO A LEGNA' : 'TRATTORIA DEL PORTO · CUCINA CASALINGA', '#ffd27a', 4.6, 0.5, 4.5, h - 0.5, -d / 2 + 0.03, 0, 'rgba(30,14,8,0.95)');
+  I.kitchen = I.toWorld(2.2, 0, -d / 2 + 0.8);
+  if (pizza) {
+    // Forno a legna con brace
+    const oven = I.mesh(new THREE.SphereGeometry(1.3, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2), std(0x8a4a2a, { roughness: 0.9 }), w / 2 - 2, 1.1, -d / 2 + 1.6);
+    oven.castShadow = true;
+    I.box(2.8, 1.1, 2.8, std(0x7a6a5a, { roughness: 1 }), w / 2 - 2, 0.55, -d / 2 + 1.6, { solid: true });
+    const mouth = I.mesh(new THREE.CircleGeometry(0.42, 20, 0, Math.PI), new THREE.MeshBasicMaterial({ color: 0xff7a1a, toneMapped: false }), w / 2 - 2, 1.12, -d / 2 + 2.92);
+    const fire = new THREE.PointLight(0xff7a2a, 9, 8, 2);
+    fire.position.set(w / 2 - 2, 1.4, -d / 2 + 3.3);
+    I.group.add(fire);
+    I.animators.push((t) => {
+      fire.intensity = 8 + Math.sin(t * 9) * 1.5 + Math.sin(t * 23) * 0.8;
+      mouth.material.color.setHSL(0.07 + Math.sin(t * 6) * 0.01, 1, 0.5);
+    });
+    I.npc({ shirt: 0xf6f6f2, pants: 0x2b2b2e, sex: 'm', uniform: 'waiter' }, w / 2 - 2, -d / 2 + 3.6, Math.PI * 0.95);
+  } else {
+    // Bancone bar con macchina del caffè e bottiglie
+    I.box(0.7, 1.1, 3.4, std(0x3a2618, { roughness: 0.35 }), w / 2 - 0.9, 0.55, -2.5, { solid: true, shadow: true });
+    I.box(0.4, 0.45, 0.5, std(0xc9ced3, { metalness: 0.95, roughness: 0.2 }), w / 2 - 0.9, 1.33, -3.4);
+    for (let i = 0; i < 10; i++) I.mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.32, 8), std([0x2e7d32, 0x7b241c, 0xf4d03f][i % 3], { roughness: 0.1 }), w / 2 - 0.25, 1.9 + (i % 2) * 0.45, -3.8 + Math.floor(i / 2) * 0.35);
+  }
+  for (const [x, z] of [[-5, -2.5], [0, -2.5], [5, -2.5], [-5, 1], [0, 1], [5, 1]]) I.light(x, h - 0.65, z, 0xffd6a0, pizza ? 5 : 6, { fixture: 'pendant', shadow: x === 0 && z === 1 });
+
+  // Tavoli: il giocatore si siede sul lato +Z (guardando verso il fondo)
+  const clothMat = pizza
+    ? std(0xffffff, { map: TEX.tiles((x, y) => ((x + y) % 2 ? 0xffffff : 0xc0392b), '#ffffff', rng, 8, 1, 1), roughness: 1 })
+    : std(0xf6f2ea, { roughness: 1 });
+  const tables = [[-4.6, -2.6], [-4.6, 0.6], [-4.6, 3.6], [4.6, -2.0], [4.6, 1.0], [4.6, 4.0]];
+  tables.forEach(([tx, tz], idx) => {
+    I.table(tx, tz, 1.1, 1.1, 0x4a3020, 0.76);
+    I.box(1.2, 0.02, 1.2, clothMat, tx, 0.79, tz);
+    I.mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.18, 8), std(0xe8e8e8, { roughness: 0.1 }), tx + 0.3, 0.88, tz - 0.3);
+    I.chair(tx, tz + 0.8, Math.PI, 0x5a3a24);
+    I.chair(tx, tz - 0.8, 0, 0x5a3a24);
+    // Alcuni tavoli sono occupati da clienti NPC
+    if (idx % 3 === 1) {
+      const diner = makePerson({ ...randomLook(rng) });
+      diner.position.set(tx, 0.5 - diner.userData.hipHeight, tz - 0.8);
+      diner.rotation.y = 0;
+      diner.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+      I.group.add(diner);
+      const anim = new HumanAnimator(diner);
+      const ph = rng() * 10;
+      I.animators.push((t, dt) => anim.update(dt, { state: 'sit', look: Math.sin(t * 0.3 + ph) * 0.3 }));
+      const plate = I.mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.02, 20), std(0xffffff, { roughness: 0.2 }), tx, 0.81, tz - 0.35);
+      plate.castShadow = false;
+    } else {
+      const seatIndex = I.seats.length;
+      I.seats.push({
+        seat: I.toWorld(tx, 0.5, tz + 0.8),
+        facing: Math.PI,
+        table: I.toWorld(tx, 0.8, tz),
+        plate: I.toWorld(tx, 0.81, tz + 0.32),
+        waiterSpot: I.toWorld(tx + (tx < 0 ? 1.1 : -1.1), 0, tz + 0.6),
+      });
+      I.interact(tx, tz + 1.5, 'sederti al tavolo', 'seat', { index: seatIndex }, 1.1);
+    }
+  });
+  I.plant(-w / 2 + 0.7, d / 2 - 0.8, 1.2);
+  I.plant(w / 2 - 0.7, d / 2 - 0.8, 1.2);
+  return { w, d, h };
+}

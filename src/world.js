@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { seededRandom } from './birthdata.js';
+import { buildLandmark, CITY_STYLE } from './landmarks.js';
 
 export const BLOCK = 44;
 export const ROAD = 14;
@@ -29,7 +30,23 @@ export const BUILDING_TYPES = {
   market: { name: 'Minimarket', sign: 'MINIMARKET', signColor: '#7dff9a', signBg: 'rgba(16,60,36,0.95)', w: 18, d: 12, h: 6, style: 'concrete' },
   bank: { name: 'Banca', sign: 'BANCA', signColor: '#f0c860', signBg: 'rgba(30,22,12,0.95)', w: 20, d: 16, h: 18, style: 'glass' },
   bar: { name: 'Locale "Paradise"', sign: 'PARADISE', signColor: '#ff6fae', signBg: 'rgba(10,6,12,0.95)', w: 14, d: 12, h: 9, style: 'brick' },
-  garage: { name: 'Officina & Concessionaria', sign: 'OFFICINA', signColor: '#8fd0ff', signBg: 'rgba(10,20,32,0.95)', w: 22, d: 16, h: 7, style: 'industrial' },
+  garage: { name: 'Concessionario', sign: 'CONCESSIONARIO', signColor: '#8fd0ff', signBg: 'rgba(10,20,32,0.95)', w: 24, d: 16, h: 8, style: 'industrial' },
+  weapons: { name: 'Armeria', sign: 'ARMERIA', signColor: '#ff9a4a', signBg: 'rgba(24,14,8,0.95)', w: 14, d: 12, h: 7, style: 'brick' },
+  clothing: { name: 'Boutique abbigliamento', sign: 'BOUTIQUE', signColor: '#f5e6ff', signBg: 'rgba(30,18,40,0.95)', w: 18, d: 13, h: 10, style: 'glass' },
+  pharmacy: { name: 'Farmacia', sign: '✚ FARMACIA', signColor: '#5dff8a', signBg: 'rgba(6,30,14,0.95)', w: 14, d: 12, h: 9, style: 'concrete' },
+  restaurant: { name: 'Trattoria del Porto', sign: 'RISTORANTE', signColor: '#ffd27a', signBg: 'rgba(40,14,10,0.95)', w: 18, d: 14, h: 9, style: 'brick' },
+  pizzeria: { name: 'Pizzeria Vesuvio', sign: 'PIZZERIA', signColor: '#ff6a4d', signBg: 'rgba(16,40,20,0.95)', w: 16, d: 13, h: 8, style: 'brick' },
+  church: { name: 'Chiesa di San Michele', sign: null, w: 18, d: 26, h: 14, style: 'concrete' },
+  police: { name: 'Stazione di Polizia', sign: 'POLIZIA', signColor: '#8fc0ff', signBg: 'rgba(10,20,50,0.95)', w: 22, d: 14, h: 12, style: 'concrete' },
+};
+
+/** Icone/colori per minimappa e mappa grande. */
+export const MAP_ICONS = {
+  home: { color: '#f0b43c', letter: 'C' }, hospital: { color: '#ff5a5a', letter: 'H' }, market: { color: '#7dff9a', letter: 'M' },
+  bank: { color: '#f0c860', letter: '€' }, bar: { color: '#ff6fae', letter: 'B' }, garage: { color: '#8fd0ff', letter: 'V' },
+  weapons: { color: '#ff9a4a', letter: 'A' }, clothing: { color: '#d9b8ff', letter: 'S' }, pharmacy: { color: '#5dff8a', letter: '+' },
+  restaurant: { color: '#ffd27a', letter: 'R' }, pizzeria: { color: '#ff6a4d', letter: 'P' }, church: { color: '#ffffff', letter: '†' },
+  police: { color: '#8fc0ff', letter: 'Π' }, atm: { color: '#7fd0ff', letter: '$' },
 };
 
 function signTexture(text, color, bg) {
@@ -212,14 +229,22 @@ export class CityWorld {
     this.doorRings = [];
     this.mapData = { blocks: [], buildings: [], home: null, hospital: null, doors: [] };
     const homeRow = SPAWN_ROW[familyId] ?? 3;
-    // Blocchi con edifici speciali (righe/colonne sempre distinte tra loro)
+    this.style = CITY_STYLE[city.id] || {};
+    this.atms = [];
+    this.parkingSpots = [];
+    this.dealerSpot = null;
+    // Blocchi con edifici speciali. Le righe 0, 2 e 6 non ospitano mai la casa (righe 1, 3, 4, 5).
     this.features = {
       [`${homeRow},${SPAWN_COL}`]: 'home',
       [`${homeRow},2`]: 'market',
       [`${homeRow},4`]: 'bar',
       '2,5': 'hospital',
-      '2,1': 'bank',
-      '4,5': 'garage',
+      '2,1': { south: 'bank', north: 'pharmacy' },
+      '2,3': 'church',
+      '2,4': 'restaurant',
+      '0,3': { south: 'clothing', north: 'police' },
+      '6,3': { south: 'garage', north: 'weapons' },
+      '6,5': { south: 'pizzeria', north: 'pharmacy' },
     };
 
     this.staticMaterial = new CANNON.Material('static');
@@ -229,8 +254,49 @@ export class CityWorld {
     this.buildBlocks();
     this.buildRoadMarkings();
     this.buildStreetProps();
+    this.buildAtms();
     this.buildBounds();
     this.buildSky();
+    const lm = buildLandmark(city.id, HALF);
+    this.landmark = lm.group;
+    this.root.add(this.landmark);
+  }
+
+  /** Bancomat sui marciapiedi (uno accanto alla banca + altri sparsi). */
+  buildAtms() {
+    const spots = [];
+    const bankDoor = this.doors.find((d) => d.type === 'bank');
+    if (bankDoor) spots.push({ x: bankDoor.x + 4.5, z: bankDoor.z + bankDoor.nz * 0.35, nz: bankDoor.nz });
+    const picks = [[1, 1], [3, 5], [4, 2], [5, 4], [3, 0], [0, 5], [6, 1], [5, 6]];
+    for (const [r, c] of picks) {
+      const cx = blockCenter(c), cz = blockCenter(r);
+      spots.push({ x: cx + 3, z: cz + BLOCK / 2 - 0.9, nz: -1 });
+    }
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2c3e50, metalness: 0.6, roughness: 0.35 });
+    const screenMat = new THREE.MeshStandardMaterial({ color: 0x0a1a2a, emissive: 0x3fa9ff, emissiveIntensity: 0.9 });
+    const topMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7fd0ff, emissiveIntensity: 0.8 });
+    for (const s of spots) {
+      const g = new THREE.Group();
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.7, 0.6), bodyMat);
+      box.position.y = 0.85;
+      box.castShadow = true;
+      const screen = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.32, 0.02), screenMat);
+      screen.position.set(0, 1.28, 0.31);
+      screen.rotation.x = -0.25;
+      const keypad = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.22), new THREE.MeshStandardMaterial({ color: 0x8a9099, metalness: 0.7 }));
+      keypad.position.set(0, 1.02, 0.36);
+      const top = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.18, 0.62), topMat);
+      top.position.y = 1.79;
+      g.add(box, screen, keypad, top);
+      g.position.set(s.x, SIDEWALK_H, s.z);
+      // Lo schermo guarda verso il lato da cui arriva il giocatore
+      g.rotation.y = s.nz > 0 ? 0 : Math.PI;
+      this.root.add(g);
+      this.addStaticBox(s.x, SIDEWALK_H + 0.85, s.z, 0.45, 0.85, 0.3);
+      const front = { x: s.x, z: s.z + (s.nz > 0 ? 0.9 : -0.9) };
+      this.atms.push({ x: front.x, z: front.z, mx: s.x, mz: s.z });
+    }
+    this.windowMaterials.push(topMat);
   }
 
   /* ---------- Fisica ---------- */
@@ -388,53 +454,132 @@ export class CityWorld {
     }
   }
 
-  /** Edificio accessibile sul lato sud del blocco + due palazzi generici nella metà nord. */
-  buildFeatureBlock(cx, cz, dist, type) {
+  /**
+   * Blocco con edifici accessibili: uno sul lato sud (porta verso +Z) e/o uno sul lato nord (porta verso −Z).
+   * Se c'è un solo edificio speciale, la metà libera viene riempita con palazzi generici.
+   */
+  buildFeatureBlock(cx, cz, dist, spec) {
     const rng = this.rng;
-    const def = BUILDING_TYPES[type];
-    const w = def.w, d = def.d;
-    const h = def.h ?? { rich: 12, middle: 18, worker: 11, poor: 16 }[dist.id];
-    const style = def.style ?? (dist.id === 'rich' ? 'concrete' : dist.style);
-    const bz = cz + BLOCK / 2 - 4 - d / 2;
-    this.addBuilding(cx, bz, w, d, h, style, dist.id);
-    const faceZ = bz + d / 2;
-    this.addDoor(type, cx, faceZ, def);
+    const faces = typeof spec === 'string' ? { south: spec } : spec;
+    let southDepth = 0, northDepth = 0;
+    for (const [face, type] of Object.entries(faces)) {
+      if (!type) continue;
+      const def = BUILDING_TYPES[type];
+      const nz = face === 'south' ? 1 : -1;
+      const w = def.w, d = def.d;
+      const h = def.h ?? { rich: 12, middle: 18, worker: 11, poor: 16 }[dist.id];
+      const style = def.style ?? (dist.id === 'rich' ? 'concrete' : dist.style);
+      const bz = cz + nz * (BLOCK / 2 - 4 - d / 2);
+      const faceZ = bz + nz * (d / 2);
+      if (face === 'south') southDepth = d; else northDepth = d;
 
-    if (type === 'market') {
-      // Vetrine illuminate ai lati dell'ingresso
-      const glow = new THREE.MeshStandardMaterial({ color: 0x0c1a14, emissive: 0xdfffe8, emissiveIntensity: 0.7, roughness: 0.1, metalness: 0.3 });
-      this.windowMaterials.push(glow);
-      for (const sx of [-1, 1]) {
-        const win = new THREE.Mesh(new THREE.BoxGeometry(5, 2.4, 0.08), glow);
-        win.position.set(cx + sx * 4.6, SIDEWALK_H + 1.6, faceZ + 0.05);
-        this.root.add(win);
+      if (type === 'church') this.buildChurch(cx, bz, w, d, h, nz);
+      else this.addBuilding(cx, bz, w, d, h, style, dist.id);
+      this.addDoor(type, cx, faceZ, def, type === 'church' || type === 'garage' ? 2.6 : 1.8, nz);
+
+      if (type === 'market' || type === 'clothing' || type === 'pharmacy' || type === 'restaurant' || type === 'pizzeria') {
+        // Vetrine illuminate ai lati dell'ingresso
+        const tint = { market: 0xdfffe8, clothing: 0xf6eaff, pharmacy: 0xe4ffe9, restaurant: 0xffe3b0, pizzeria: 0xffd6a8 }[type];
+        const glow = new THREE.MeshStandardMaterial({ color: 0x0c1014, emissive: tint, emissiveIntensity: 0.7, roughness: 0.08, metalness: 0.4 });
+        this.windowMaterials.push(glow);
+        for (const sx of [-1, 1]) {
+          const win = new THREE.Mesh(new THREE.BoxGeometry(Math.min(5, w / 2 - 2.2), 2.4, 0.08), glow);
+          win.position.set(cx + sx * (Math.min(5, w / 2 - 2.2) / 2 + 1.7), SIDEWALK_H + 1.6, faceZ + nz * 0.05);
+          this.root.add(win);
+        }
       }
-    } else if (type === 'garage') {
-      const shutter = new THREE.Mesh(new THREE.BoxGeometry(6, 4.2, 0.12), new THREE.MeshStandardMaterial({ color: 0x8e979f, metalness: 0.7, roughness: 0.35 }));
-      shutter.position.set(cx - 6.5, SIDEWALK_H + 2.1, faceZ + 0.06);
-      this.root.add(shutter);
+      if (type === 'pharmacy') {
+        const crossMat = new THREE.MeshStandardMaterial({ color: 0x0a3d1a, emissive: 0x2dff6a, emissiveIntensity: 1.4 });
+        this.pharmacyCross = crossMat;
+        const cross = new THREE.Group();
+        cross.add(new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 0.15), crossMat), new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.6, 0.15), crossMat));
+        cross.position.set(cx + w / 2 - 1.2, SIDEWALK_H + 4.2, faceZ + nz * 0.5);
+        this.root.add(cross);
+      }
+      if (type === 'garage') {
+        const shutter = new THREE.Mesh(new THREE.BoxGeometry(6, 4.2, 0.12), new THREE.MeshStandardMaterial({ color: 0x8e979f, metalness: 0.7, roughness: 0.35 }));
+        shutter.position.set(cx - 7, SIDEWALK_H + 2.1, faceZ + nz * 0.06);
+        this.root.add(shutter);
+        // Piazzale dove compaiono i veicoli acquistati (sulla strada davanti al concessionario)
+        this.dealerSpot = { x: cx + 6, z: faceZ + nz * 6.8, heading: Math.PI / 2 };
+      }
+      if (type === 'home') {
+        this.mapData.home = { x: cx, z: faceZ };
+        // Esci di casa: personaggio rivolto verso la strada, camera sul marciapiede che guarda la porta.
+        this.spawn = { x: cx, z: faceZ + nz * 1.6, yaw: nz > 0 ? 0 : Math.PI };
+      }
     }
 
-    if (type === 'home') {
-      this.mapData.home = { x: cx, z: faceZ };
-      // Esci di casa: personaggio rivolto verso la strada, camera sul marciapiede che guarda la porta.
-      this.spawn = { x: cx, z: faceZ + 1.6, yaw: 0 };
-    }
-
-    // Due palazzi generici nella metà nord del blocco
+    // Palazzi generici nella metà libera del blocco
     const inner = BLOCK - 8;
-    const northLimit = bz - d / 2 - 1.5; // non devono toccare l'edificio speciale
-    const depth = Math.min(inner / 2 - 2, northLimit - (cz - inner / 2));
-    if (depth > 6) {
-      for (const sx of [-1, 1]) {
-        const hh = dist.minH + rng() * (dist.maxH - dist.minH) * 0.6;
-        this.addBuilding(cx + sx * inner / 4, cz - inner / 2 + depth / 2, inner / 2 - 2, depth, hh, dist.style, dist.id);
+    if (!northDepth && southDepth) {
+      const depth = Math.min(inner / 2 - 2, inner - southDepth - 1.5);
+      if (depth > 6) {
+        for (const sx of [-1, 1]) {
+          const hh = dist.minH + rng() * (dist.maxH - dist.minH) * 0.6;
+          this.addBuilding(cx + sx * inner / 4, cz - inner / 2 + depth / 2, inner / 2 - 2, depth, hh, dist.style, dist.id);
+        }
+      }
+    } else if (!southDepth && northDepth) {
+      const depth = Math.min(inner / 2 - 2, inner - northDepth - 1.5);
+      if (depth > 6) {
+        for (const sx of [-1, 1]) {
+          const hh = dist.minH + rng() * (dist.maxH - dist.minH) * 0.6;
+          this.addBuilding(cx + sx * inner / 4, cz + inner / 2 - depth / 2, inner / 2 - 2, depth, hh, dist.style, dist.id);
+        }
       }
     }
   }
 
+  /** Chiesa: navata in pietra, tetto a capanna, campanile con croce e rosone. */
+  buildChurch(cx, bz, w, d, h, nz) {
+    const stone = new THREE.MeshStandardMaterial({ color: 0xd8cdb6, roughness: 0.9, map: this.stoneTex || (this.stoneTex = noiseTexture(0xd8cdb6, 30, 256, 6, this.rng, true)) });
+    const nave = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), stone);
+    nave.position.set(cx, SIDEWALK_H + h / 2, bz);
+    nave.castShadow = nave.receiveShadow = true;
+    this.root.add(nave);
+    this.collidables.push(nave);
+    this.addStaticBox(cx, SIDEWALK_H + h / 2, bz, w / 2, h / 2, d / 2);
+    // Tetto a capanna
+    const roofShape = new THREE.Shape();
+    roofShape.moveTo(-w / 2 - 0.6, 0);
+    roofShape.lineTo(0, 6);
+    roofShape.lineTo(w / 2 + 0.6, 0);
+    roofShape.closePath();
+    const roofGeo = new THREE.ExtrudeGeometry(roofShape, { depth: d + 1, bevelEnabled: false });
+    roofGeo.translate(0, 0, -(d + 1) / 2);
+    const roof = new THREE.Mesh(roofGeo, new THREE.MeshStandardMaterial({ color: 0x8a3b2a, roughness: 0.8 }));
+    roof.position.set(cx, SIDEWALK_H + h, bz);
+    roof.castShadow = true;
+    this.root.add(roof);
+    // Campanile
+    const tx = cx + w / 2 - 2.5, tz = bz + nz * (d / 2 - 2.5);
+    const tower = new THREE.Mesh(new THREE.BoxGeometry(5, h + 12, 5), stone);
+    tower.position.set(tx, SIDEWALK_H + (h + 12) / 2, tz);
+    tower.castShadow = true;
+    this.root.add(tower);
+    this.collidables.push(tower);
+    const spire = new THREE.Mesh(new THREE.ConeGeometry(3.8, 7, 4), new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.6, metalness: 0.3 }));
+    spire.rotation.y = Math.PI / 4;
+    spire.position.set(tx, SIDEWALK_H + h + 12 + 3.5, tz);
+    this.root.add(spire);
+    const crossMat = new THREE.MeshStandardMaterial({ color: 0xd6a73a, metalness: 0.9, roughness: 0.25 });
+    const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.2, 0.25), crossMat);
+    c1.position.set(tx, SIDEWALK_H + h + 12 + 8, tz);
+    const c2 = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.25, 0.25), crossMat);
+    c2.position.set(tx, SIDEWALK_H + h + 12 + 8.4, tz);
+    this.root.add(c1, c2);
+    // Rosone sulla facciata
+    const rose = new THREE.Mesh(new THREE.CircleGeometry(1.6, 24), new THREE.MeshStandardMaterial({ color: 0x223355, emissive: 0x6a5acd, emissiveIntensity: 0.6 }));
+    rose.position.set(cx, SIDEWALK_H + h - 3, bz + nz * (d / 2 + 0.03));
+    if (nz < 0) rose.rotation.y = Math.PI;
+    this.windowMaterials.push(rose.material);
+    this.root.add(rose);
+    this.mapData.buildings.push({ x: cx, z: bz, w, d, district: 'church' });
+  }
+
   /** Porta accessibile: battente, telaio, pensilina, lampada, insegna e anello luminoso a terra. */
-  addDoor(type, x, faceZ, def, doorW = 1.8) {
+  addDoor(type, x, faceZ, def, doorW = 1.8, nz = 1) {
     const g = new THREE.Group();
     const wood = new THREE.MeshStandardMaterial({ color: type === 'hospital' ? 0x9fb3bd : 0x4a3324, roughness: 0.55, metalness: type === 'hospital' ? 0.4 : 0 });
     const frameMat = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.4, metalness: 0.5 });
@@ -465,18 +610,19 @@ export class CityWorld {
       g.add(sign);
     }
     g.position.set(x, SIDEWALK_H, faceZ);
+    if (nz < 0) g.rotation.y = Math.PI;
     this.root.add(g);
 
     // Indicatore luminoso discreto a terra
     const ringMat = new THREE.MeshBasicMaterial({ color: 0xf0b43c, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending });
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.68, 48), ringMat);
     ring.rotation.x = -Math.PI / 2;
-    ring.position.set(x, SIDEWALK_H + 0.02, faceZ + 1.2);
+    ring.position.set(x, SIDEWALK_H + 0.02, faceZ + nz * 1.2);
     ring.renderOrder = 2;
     this.root.add(ring);
     this.doorRings.push(ring);
 
-    const doorInfo = { id: `${type}-${this.doors.length}`, type, name: def.name, x, z: faceZ, nx: 0, nz: 1 };
+    const doorInfo = { id: `${type}-${this.doors.length}`, type, name: def.name, x, z: faceZ, nx: 0, nz };
     this.doors.push(doorInfo);
     this.mapData.doors.push(doorInfo);
     return doorInfo;
@@ -582,11 +728,14 @@ export class CityWorld {
     const yAxis = new THREE.Vector3(0, 1, 0);
 
     /* Alberi */
-    const trunkGeo = new THREE.CylinderGeometry(0.18, 0.25, 3, 6);
-    trunkGeo.translate(0, 1.5, 0);
-    const crownGeo = new THREE.IcosahedronGeometry(1.9, 1);
-    crownGeo.translate(0, 4.2, 0);
-    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x5a3f2c, roughness: 1 }), this.treeSpots.length);
+    // Città calde: palme (tronco alto e chioma appiattita); altrimenti latifoglie.
+    const palms = !!this.style.warm;
+    const trunkGeo = palms ? new THREE.CylinderGeometry(0.14, 0.22, 6, 7) : new THREE.CylinderGeometry(0.18, 0.25, 3, 6);
+    trunkGeo.translate(0, palms ? 3 : 1.5, 0);
+    const crownGeo = palms ? new THREE.IcosahedronGeometry(2.1, 1) : new THREE.IcosahedronGeometry(1.9, 1);
+    if (palms) crownGeo.scale(1, 0.32, 1);
+    crownGeo.translate(0, palms ? 6.1 : 4.2, 0);
+    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: palms ? 0x7a6248 : 0x5a3f2c, roughness: 1 }), this.treeSpots.length);
     const crowns = new THREE.InstancedMesh(crownGeo, new THREE.MeshStandardMaterial({ color: 0x4d7a3a, roughness: 1, flatShading: true }), this.treeSpots.length);
     const col = new THREE.Color();
     this.treeSpots.forEach(([x, z], i) => {
@@ -650,6 +799,20 @@ export class CityWorld {
         else carSpots.push([cx - off, cz + along, Math.PI]);
       }
     }
+    // Una parte dei posti va ai veicoli veri (guidabili/rubabili), il resto resta decorativo.
+    for (let i = carSpots.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [carSpots[i], carSpots[j]] = [carSpots[j], carSpots[i]];
+    }
+    const nearDoor = (x, z) => this.doors.some((d) => Math.hypot(d.x - x, d.z + d.nz * 6 - z) < 10);
+    const decor = [];
+    for (const s of carSpots) {
+      if (nearDoor(s[0], s[1])) continue;
+      if (this.parkingSpots.length < 18) this.parkingSpots.push(s);
+      else if (decor.length < 30) decor.push(s);
+    }
+    carSpots.length = 0;
+    carSpots.push(...decor);
     const bodyGeo = new THREE.BoxGeometry(1.85, 0.75, 4.3);
     bodyGeo.translate(0, 0.7, 0);
     const cabinGeo = new THREE.BoxGeometry(1.6, 0.6, 2.2);
@@ -839,6 +1002,49 @@ export class DayCycle {
     this._top = new THREE.Color();
     this._bottom = new THREE.Color();
     this.indoor = false;
+    this.shadowsEnabled = true;
+    this.pmrem = null;
+  }
+
+  /** Riflessi PBR: mappa d'ambiente generata dal cielo (aggiornata quando cambia la luce). */
+  setupEnvironment(renderer) {
+    this.pmrem = new THREE.PMREMGenerator(renderer);
+    this.envScene = new THREE.Scene();
+    this.envScene.add(new THREE.Mesh(new THREE.SphereGeometry(10, 32, 16), this.world.sky.material));
+    this.envGround = new THREE.Mesh(new THREE.CircleGeometry(9.5, 32), new THREE.MeshBasicMaterial({ color: 0x404040 }));
+    this.envGround.rotation.x = -Math.PI / 2;
+    this.envGround.position.y = -0.5;
+    this.envScene.add(this.envGround);
+    const indoor = new THREE.Scene();
+    indoor.add(new THREE.Mesh(new THREE.SphereGeometry(10, 16, 8), new THREE.MeshBasicMaterial({ color: 0x5a524a, side: THREE.BackSide })));
+    const light = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshBasicMaterial({ color: 0xfff3e0 }));
+    light.rotation.x = Math.PI / 2;
+    light.position.y = 8;
+    indoor.add(light);
+    this.indoorEnv = this.pmrem.fromScene(indoor, 0.04);
+    this.envTarget = null;
+    this.lastEnvDay = -1;
+    this.lastEnvDusk = -1;
+  }
+
+  updateEnvironment(day, dusk) {
+    if (!this.pmrem) return;
+    if (this.indoor) {
+      this.scene.environment = this.indoorEnv.texture;
+      this.lastEnvDay = -1;
+      return;
+    }
+    if (this.envTarget && Math.abs(day - this.lastEnvDay) < 0.05 && Math.abs(dusk - this.lastEnvDusk) < 0.08) {
+      this.scene.environment = this.envTarget.texture;
+      return;
+    }
+    this.lastEnvDay = day;
+    this.lastEnvDusk = dusk;
+    this.envGround.material.color.setScalar(0.04 + day * 0.22);
+    const rt = this.pmrem.fromScene(this.envScene, 0.03);
+    if (this.envTarget) this.envTarget.dispose();
+    this.envTarget = rt;
+    this.scene.environment = rt.texture;
   }
 
   /** hour: 0..24 */
@@ -847,12 +1053,13 @@ export class DayCycle {
       // Dentro un edificio: niente sole, solo luce diffusa di base (le luci le fornisce l'interno).
       this.sun.intensity = 0;
       this.sun.castShadow = false;
-      this.hemi.intensity = 0.12;
+      this.hemi.intensity = 0.08;
       this.hemi.color.set(0xffffff);
       this.fog.far = 2000;
+      this.updateEnvironment(1, 0);
       return { day: 1, night: 0 };
     }
-    this.sun.castShadow = true;
+    this.sun.castShadow = this.shadowsEnabled;
     const angle = ((hour - 6) / 24) * Math.PI * 2; // 6:00 alba, 12:00 zenit, 18:00 tramonto
     const elev = Math.sin(angle);
     this._dir.set(Math.cos(angle) * 0.8, elev, 0.45).normalize();
@@ -868,7 +1075,8 @@ export class DayCycle {
     sky.sunDir.value.copy(this._dir);
     sky.sunColor.value.setRGB(1, 0.85 + day * 0.1, 0.7 + day * 0.2).multiplyScalar(day > 0.02 ? 1 : 0);
     this.fog.color.copy(this._bottom);
-    this.fog.far = 260 + day * 200;
+    this.fog.near = 90;
+    this.fog.far = 480 + day * 420;
 
     // Sole (o luna) che segue il giocatore per le ombre
     const sunUp = elev > -0.05;
@@ -879,8 +1087,10 @@ export class DayCycle {
     this.sun.intensity = sunUp ? 0.4 + day * 2.4 : 0.35;
     this.sun.color.setRGB(1, 0.75 + day * 0.2, 0.55 + day * 0.35);
     if (!sunUp) this.sun.color.set(0x8fa6d8);
-    this.hemi.intensity = 0.35 + day * 0.85;
+    // Con la mappa d'ambiente attiva la luce emisferica serve meno
+    this.hemi.intensity = this.pmrem ? 0.18 + day * 0.5 : 0.35 + day * 0.85;
     this.hemi.color.copy(this._top).lerp(new THREE.Color(0xffffff), 0.4);
+    this.updateEnvironment(day, dusk);
 
     // Finestre e lampioni accesi di sera
     const night = 1 - day;
@@ -890,8 +1100,21 @@ export class DayCycle {
     return { day, night };
   }
 
+  setShadows(enabled, size = 2048) {
+    this.shadowsEnabled = enabled;
+    this.sun.castShadow = enabled && !this.indoor;
+    if (this.sun.shadow.mapSize.x !== size) {
+      this.sun.shadow.mapSize.set(size, size);
+      if (this.sun.shadow.map) { this.sun.shadow.map.dispose(); this.sun.shadow.map = null; }
+    }
+  }
+
   dispose() {
     this.scene.remove(this.hemi, this.sun, this.sun.target);
     this.scene.fog = null;
+    this.scene.environment = null;
+    if (this.envTarget) this.envTarget.dispose();
+    if (this.indoorEnv) this.indoorEnv.dispose();
+    if (this.pmrem) this.pmrem.dispose();
   }
 }

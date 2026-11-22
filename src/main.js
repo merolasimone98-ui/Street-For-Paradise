@@ -44,6 +44,9 @@ const space = new SpaceScene(renderer);
 /** Stati: 'loading' | 'menu' | 'intro' | 'transition' | 'game' */
 const app = { state: 'loading', intro: null, game: null };
 
+// Aggancio di debug (solo aprendo la pagina con #debug nell'URL)
+if (location.hash === '#debug') window.sfp = app;
+
 const menu = new Menu({
   onNewGame: () => startNewGame(),
   onContinue: (save) => continueGame(save),

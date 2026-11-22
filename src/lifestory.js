@@ -433,7 +433,9 @@ function buildSchool(root, ctx) {
         });
         kid.userData.legL.rotation.x = -1.45;
         kid.userData.legR.rotation.x = -1.45;
-        kid.position.set(x, 0.44 - 0.84 * (1.3 / 1.8), z + 0.45);
+        kid.userData.shinL.rotation.x = 1.45;
+        kid.userData.shinR.rotation.x = 1.45;
+        kid.position.set(x, 0.5 - kid.userData.hipHeight, z + 0.45);
         kid.rotation.y = Math.PI;
         // Il modello guarda +Z: lo giriamo verso la lavagna (−Z).
         root.add(kid);

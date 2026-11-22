@@ -1,197 +1,252 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="it">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Street for Paradise</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #0d0c0c;
-      font-family: "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
-      color: #f2ece4;
-      user-select: none;
-    }
-    #game-canvas {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-      outline: none;
-    }
-
-    /* ---------- HUD ---------- */
-    #hud {
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.4s ease;
-    }
-    #hud.visible { opacity: 1; }
-
-    #controls {
-      position: absolute;
-      top: 18px;
-      left: 18px;
-      padding: 12px 16px;
-      background: rgba(8, 8, 10, 0.55);
-      border-left: 3px solid #d9a441;
-      font-size: 13px;
-      line-height: 1.7;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
-    }
-    #controls h2 {
-      font-size: 12px;
-      color: #d9a441;
-      letter-spacing: 0.2em;
-      margin-bottom: 4px;
-    }
-    #controls .key {
-      display: inline-block;
-      min-width: 64px;
-      color: #ffffff;
-      font-weight: bold;
-    }
-    #controls .desc { color: #c9c2b8; }
-
-    #crosshair {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 22px;
-      height: 22px;
-      transform: translate(-50%, -50%);
-    }
-    #crosshair::before,
-    #crosshair::after {
-      content: "";
-      position: absolute;
-      background: rgba(255, 255, 255, 0.85);
-      box-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
-    }
-    #crosshair::before { left: 10px; top: 0; width: 2px; height: 22px; }
-    #crosshair::after { top: 10px; left: 0; width: 22px; height: 2px; }
-    #crosshair .dot {
-      position: absolute;
-      top: 9px;
-      left: 9px;
-      width: 4px;
-      height: 4px;
-      background: #d9a441;
-      border-radius: 50%;
-      z-index: 1;
-    }
-
-    /* ---------- Schermata iniziale ---------- */
-    #start-screen {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      background:
-        radial-gradient(ellipse at center, rgba(20, 16, 14, 0.35) 0%, rgba(6, 5, 5, 0.92) 75%),
-        linear-gradient(180deg, rgba(60, 40, 30, 0.35), rgba(0, 0, 0, 0.6));
-      transition: opacity 0.35s ease;
-      z-index: 10;
-    }
-    #start-screen.hidden { opacity: 0; pointer-events: none; }
-    #start-screen h1 {
-      font-family: Impact, "Arial Black", "Helvetica Neue", sans-serif;
-      font-size: clamp(40px, 8vw, 104px);
-      letter-spacing: 0.06em;
-      color: #f4efe6;
-      text-shadow: 0 4px 0 #000, 0 0 40px rgba(217, 164, 65, 0.35);
-      text-align: center;
-      line-height: 0.95;
-    }
-    #start-screen h1 span { color: #d9a441; }
-    #start-screen .tagline {
-      margin-top: 14px;
-      font-size: 14px;
-      letter-spacing: 0.5em;
-      color: #a8a096;
-      text-transform: uppercase;
-    }
-    #start-hint {
-      margin-top: 48px;
-      padding: 12px 30px;
-      border: 2px solid #d9a441;
-      font-size: 18px;
-      font-weight: bold;
-      letter-spacing: 0.25em;
-      text-transform: uppercase;
-      color: #fff;
-      background: rgba(0, 0, 0, 0.4);
-      animation: blink 1.4s ease-in-out infinite;
-    }
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.35; }
-    }
-    #error-box {
-      display: none;
-      margin-top: 24px;
-      max-width: 80vw;
-      padding: 10px 14px;
-      background: rgba(140, 20, 20, 0.85);
-      font-size: 13px;
-      font-family: monospace;
-    }
-  </style>
-
+  <meta name="description" content="Street for Paradise — open-world 3D in browser. Nasci, cresci, sopravvivi.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;400;500;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
   <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
-      }
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
     }
+  }
   </script>
 </head>
 <body>
-  <canvas id="game-canvas" tabindex="0"></canvas>
+  <canvas id="game-canvas"></canvas>
 
-  <div id="hud">
-    <div id="controls">
-      <h2>Comandi</h2>
-      <div><span class="key">W A S D</span><span class="desc">Muoviti</span></div>
-      <div><span class="key">Shift</span><span class="desc">Corri</span></div>
-      <div><span class="key">Spazio</span><span class="desc">Salta</span></div>
-      <div><span class="key">Mouse</span><span class="desc">Visuale</span></div>
-      <div><span class="key">Rotella</span><span class="desc">Zoom</span></div>
-      <div><span class="key">Esc</span><span class="desc">Pausa</span></div>
+  <!-- Caricamento iniziale -->
+  <div id="loading">
+    <div class="loading-inner">
+      <div class="loading-title">STREET FOR PARADISE</div>
+      <div class="loading-bar"><span></span></div>
+      <div class="loading-text" id="loading-text">Caricamento dell'universo…</div>
     </div>
-    <div id="crosshair"><div class="dot"></div></div>
   </div>
 
-  <div id="start-screen">
-    <h1>STREET FOR <span>PARADISE</span></h1>
-    <div class="tagline">Liberty of the streets</div>
-    <div id="start-hint">Clicca per iniziare</div>
-    <div id="error-box"></div>
+  <!-- Errore di avvio (es. file aperto senza server) -->
+  <div id="boot-error" class="hidden">
+    <div class="boot-box">
+      <h2>Impossibile avviare il gioco</h2>
+      <p id="boot-error-text">I moduli ES6 non si sono caricati. Apri il gioco tramite un server web (es. GitHub Pages oppure <code>python -m http.server</code>) e non con doppio clic sul file.</p>
+    </div>
   </div>
+
+  <!-- MENU PRINCIPALE -->
+  <section id="menu" class="screen hidden" aria-label="Menu principale">
+    <div class="menu-vignette"></div>
+    <div class="grain"></div>
+    <div class="menu-content">
+      <div class="menu-kicker">Una vita. Una città. Nessuna garanzia.</div>
+      <h1 class="title" aria-label="Street for Paradise">
+        <span class="t-line t1">STREET</span>
+        <span class="t-line t2"><em>for</em></span>
+        <span class="t-line t3">PARADISE</span>
+      </h1>
+      <div class="title-rule"></div>
+      <div class="menu-buttons">
+        <button id="btn-play" class="btn-main" type="button">
+          <span class="btn-main-label">GIOCA</span>
+          <span class="btn-main-arrow">›</span>
+        </button>
+        <div id="play-options" class="play-options" aria-hidden="true">
+          <button id="btn-new" class="btn-opt" type="button" tabindex="-1">
+            <span class="opt-index">01</span>
+            <span class="opt-body">
+              <span class="opt-title">NEW GAME</span>
+              <span class="opt-sub">Inizia una nuova vita da zero</span>
+            </span>
+          </button>
+          <button id="btn-continue" class="btn-opt" type="button" tabindex="-1">
+            <span class="opt-index">02</span>
+            <span class="opt-body">
+              <span class="opt-title">CONTINUA GAME</span>
+              <span class="opt-sub" id="continue-sub">Nessun salvataggio trovato</span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="menu-footer">
+      <span>Premi <kbd>INVIO</kbd> per giocare</span>
+      <span class="menu-version">v0.1 · Three.js + Cannon-es</span>
+    </div>
+  </section>
+
+  <!-- MODALE DI CONFERMA -->
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box">
+      <div class="modal-title" id="modal-title">Conferma</div>
+      <div class="modal-text" id="modal-text"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn-ghost" type="button">Annulla</button>
+        <button id="modal-ok" class="btn-solid" type="button">Conferma</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- BANDE CINEMATOGRAFICHE + CAPTION INTRO -->
+  <div id="cinema-bars"><div class="bar top"></div><div class="bar bottom"></div></div>
+  <div id="intro-caption" class="hidden">
+    <div class="ic-kicker" id="ic-kicker"></div>
+    <div class="ic-title" id="ic-title"></div>
+  </div>
+
+  <!-- PANNELLO SCELTA NASCITA -->
+  <section id="birth-panel" class="hidden" aria-label="Destinazione di nascita">
+    <header class="bp-header">
+      <div>
+        <div class="bp-kicker">DESTINAZIONE DI NASCITA</div>
+        <div class="bp-gen">Tentativo <span id="bp-attempt">1</span></div>
+      </div>
+      <div class="bp-coords" id="bp-coords">0.00° N · 0.00° E</div>
+    </header>
+    <div class="bp-body" id="bp-body">
+      <div class="bp-section">
+        <div class="bp-label">Paese · Città</div>
+        <div class="bp-city"><span id="bp-city">—</span><span class="bp-code" id="bp-code">--</span></div>
+        <div class="bp-country" id="bp-country">—</div>
+        <ul class="bp-traits" id="bp-traits"></ul>
+      </div>
+      <div class="bp-section">
+        <div class="bp-label">Famiglia · Contesto</div>
+        <div class="bp-family" id="bp-family">—</div>
+        <div class="bp-desc" id="bp-family-desc"></div>
+        <div class="bp-money">Patrimonio stimato a 18 anni <strong id="bp-money">—</strong></div>
+      </div>
+      <div class="bp-section bp-placenta">
+        <div class="bp-label">Selezione biologica · Placenta</div>
+        <div class="placenta-wrap">
+          <canvas id="placenta-canvas"></canvas>
+          <div class="placenta-meta" id="bp-meta"></div>
+        </div>
+        <div class="gene-row"><span>Resistenza</span><div class="gene-bar"><i id="gene-res"></i></div><b id="gene-res-v">0</b></div>
+        <div class="gene-row"><span>Carisma</span><div class="gene-bar"><i id="gene-car"></i></div><b id="gene-car-v">0</b></div>
+        <div class="gene-row"><span>Riflessi</span><div class="gene-bar"><i id="gene-rif"></i></div><b id="gene-rif-v">0</b></div>
+      </div>
+    </div>
+    <footer class="bp-actions">
+      <button id="btn-reroll" class="btn-ghost" type="button">RIFIUTA E CERCA SUCCESSIVA</button>
+      <button id="btn-confirm-birth" class="btn-solid" type="button">CONFERMA NASCITA</button>
+    </footer>
+  </section>
+
+  <!-- UI PANORAMICA 0-18 -->
+  <section id="story-ui" class="hidden">
+    <div class="story-fade" id="story-fade"></div>
+    <div class="story-head">
+      <div class="story-chapter" id="story-chapter"></div>
+      <div class="story-title" id="story-title"></div>
+    </div>
+    <div class="story-age"><span class="story-age-label">ETÀ</span><span id="story-age">0</span></div>
+    <div class="story-text" id="story-text"></div>
+    <div class="story-choices hidden" id="story-choices">
+      <div class="sc-title">Che strada prendi?</div>
+      <div class="sc-buttons" id="sc-buttons"></div>
+      <div class="sc-timer"><i id="sc-timer-bar"></i></div>
+    </div>
+  </section>
+
+  <!-- INDICATORE SKIP [V] -->
+  <div id="skip" class="hidden" aria-live="polite">
+    <span class="skip-label">Tieni premuto <kbd>V</kbd> per saltare</span>
+    <svg class="skip-ring" viewBox="0 0 40 40" aria-hidden="true">
+      <circle class="skip-track" cx="20" cy="20" r="16"></circle>
+      <circle class="skip-fill" id="skip-fill" cx="20" cy="20" r="16"></circle>
+    </svg>
+  </div>
+
+  <!-- HUD GAMEPLAY -->
+  <section id="hud" class="hidden">
+    <div class="hud-top-left">
+      <div class="hud-name" id="hud-name">—</div>
+      <div class="hud-location"><span id="hud-city">—</span> · <span id="hud-district">—</span></div>
+      <div class="hud-family" id="hud-family">—</div>
+      <div class="hud-stats">
+        <div class="hs"><span>RES</span><div class="hs-bar"><i id="hud-res"></i></div></div>
+        <div class="hs"><span>CAR</span><div class="hs-bar"><i id="hud-car"></i></div></div>
+        <div class="hs"><span>RIF</span><div class="hs-bar"><i id="hud-rif"></i></div></div>
+      </div>
+    </div>
+    <div class="hud-top-right">
+      <div class="hud-money" id="hud-money">$0</div>
+      <div class="hud-meta"><span id="hud-age">18 anni</span> · <span id="hud-day">Giorno 1</span> · <span id="hud-clock">09:00</span></div>
+      <div class="hud-save" id="hud-save">Salvataggio…</div>
+    </div>
+    <div class="hud-minimap"><canvas id="minimap" width="180" height="180"></canvas></div>
+    <div class="hud-help">WASD muovi · SHIFT corri · SPAZIO salta · E interagisci · C scheda · ESC pausa</div>
+    <div id="interact-prompt" class="hidden">Premi <kbd>E</kbd> per <span id="interact-text">entrare</span></div>
+  </section>
+
+  <!-- SCHEDA PERSONAGGIO -->
+  <aside id="char-card" class="hidden" aria-label="Scheda personaggio">
+    <div class="cc-head">
+      <div class="cc-kicker">SCHEDA PERSONAGGIO</div>
+      <div class="cc-name" id="cc-name">—</div>
+      <div class="cc-sub" id="cc-sub">—</div>
+    </div>
+    <div class="cc-grid" id="cc-grid"></div>
+    <div class="cc-label">Selezione biologica · Placenta</div>
+    <div class="cc-grid" id="cc-birth"></div>
+    <div class="cc-label">Statistiche (alla nascita → oggi)</div>
+    <div id="cc-stats"></div>
+    <div class="cc-label">Background</div>
+    <div class="cc-tags" id="cc-tags"></div>
+    <div class="cc-foot">Premi <kbd>C</kbd> per chiudere</div>
+  </aside>
+
+  <!-- CLICCA PER GIOCARE -->
+  <div id="click-to-play" class="hidden">
+    <div class="ctp-box">
+      <div class="ctp-title" id="ctp-title">Clicca per giocare</div>
+      <div class="ctp-sub" id="ctp-sub"></div>
+      <div class="ctp-keys">
+        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Muoviti</span>
+        <span><kbd>MOUSE</kbd> Telecamera</span>
+        <span><kbd>SHIFT</kbd> Corri</span>
+        <span><kbd>SPAZIO</kbd> Salta</span>
+        <span><kbd>ROTELLA</kbd> Zoom</span>
+        <span><kbd>E</kbd> Entra / Esci</span>
+        <span><kbd>C</kbd> Scheda</span>
+        <span><kbd>ESC</kbd> Pausa</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- PAUSA -->
+  <section id="pause" class="screen hidden" aria-label="Pausa">
+    <div class="pause-box">
+      <div class="pause-kicker">PAUSA</div>
+      <div class="pause-info" id="pause-info"></div>
+      <button id="btn-resume" class="btn-pause" type="button">Riprendi</button>
+      <button id="btn-save" class="btn-pause" type="button">Salva partita</button>
+      <button id="btn-menu" class="btn-pause" type="button">Menu principale</button>
+    </div>
+  </section>
+
+  <div id="toast"></div>
+  <div id="fade"></div>
 
   <script>
-    // Mostra a schermo eventuali errori di caricamento (es. CDN non raggiungibile).
-    function showGameError(msg) {
-      var box = document.getElementById('error-box');
-      if (box) {
-        box.textContent = 'Errore: ' + msg;
-        box.style.display = 'block';
+    // Se i moduli non partono (file:// o CDN irraggiungibile) mostra un messaggio chiaro.
+    setTimeout(function () {
+      if (!window.__SFP_BOOTED) {
+        var l = document.getElementById('loading');
+        if (l) l.style.display = 'none';
+        var e = document.getElementById('boot-error');
+        if (e) e.classList.remove('hidden');
+        if (location.protocol === 'file:') {
+          document.getElementById('boot-error-text').innerHTML = 'Il gioco è stato aperto come file locale. Avvialo da un server web: <code>python -m http.server 8080</code> e poi apri <code>http://localhost:8080</code>, oppure pubblicalo su GitHub Pages.';
+        }
       }
-    }
-    window.addEventListener('error', function (e) {
-      showGameError(e.message || 'impossibile caricare uno script');
-    });
+    }, 12000);
   </script>
-  <script type="module" src="./src/main.js" onerror="showGameError('impossibile caricare src/main.js')"></script>
+  <script type="module" src="src/main.js"></script>
 </body>
 </html>

@@ -1,65 +1,101 @@
-// Menu ESC (Mappa · Impostazioni · Statistiche/Aura) e menu TAB (Inventario · Portafoglio · Telefono).
+// ESC: mappa a schermo intero (il gioco continua) con pulsante PAUSA (impostazioni, statistiche, torna al menù).
+// TAB: inventario compatto al centro (stile GTA V) + telefono piccolo in basso a sinistra.
 import { itemInfo, CATEGORY_LABELS, ITEMS } from './items.js';
 import { formatMoney } from './birthdata.js';
-import { MAP_ICONS, HALF, ROAD, BUILDING_TYPES } from './world.js';
-import { $ } from './ui.js';
+import { MAP_ICONS, WORLD_EXT, URBAN_HALF, BUILDING_TYPES } from './world.js';
+import { settingsFormHtml, bindSettingsForm, loadSettings } from './settings.js';
+import { audio, bindUiSounds } from './audio.js';
+import { $, confirmDialog } from './ui.js';
+import { rewardFor, levelTitle, MAX_AURA_LEVEL, PARADISE_LEVEL, PARADISE_PREVIEW_LEVEL } from './aura.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const EXT = HALF + ROAD / 2 + 30;
+const EXT = WORLD_EXT;
 
 /* =====================================================================
-   ESC: mappa grande, impostazioni, statistiche
+   ESC: Mappa (live) · Statistiche · PAUSA
    ===================================================================== */
 export class EscMenu {
   constructor(game) {
     this.game = game;
     this.root = $('esc-menu');
-    this.tab = 'map';
+    this.view = 'map'; // 'map' | 'stats' | 'pause'
+    this.redraw = 0;
+    bindUiSounds(this.root);
     this.root.addEventListener('click', (e) => {
       const t = e.target.closest('[data-esc]');
       if (!t) return;
       const a = t.dataset.esc;
-      if (a === 'tab') { this.tab = t.dataset.tab; this.render(); }
+      if (a === 'view') this.setView(t.dataset.view);
+      else if (a === 'pause') this.setView('pause');
       else if (a === 'resume') this.game.resume();
       else if (a === 'save') this.game.manualSave();
-      else if (a === 'menu') this.game.exitToMenu();
+      else if (a === 'menu') this.askMainMenu();
     });
-    this.root.addEventListener('input', (e) => this.onSetting(e));
-    this.root.addEventListener('change', (e) => this.onSetting(e));
   }
 
   get isOpen() {
     return !this.root.classList.contains('hidden');
   }
 
-  open(tab) {
-    if (tab) this.tab = tab;
+  open(view = 'map') {
     this.root.classList.remove('hidden');
-    this.render();
+    this.setView(view);
   }
 
   close() {
     this.root.classList.add('hidden');
+    if (this.unbindSettings) { this.unbindSettings(); this.unbindSettings = null; }
+    this.game.setPaused(false);
+  }
+
+  setView(view) {
+    this.view = view;
+    // Solo la vista PAUSA ferma davvero il gioco
+    this.game.setPaused(view === 'pause');
+    this.render();
+  }
+
+  async askMainMenu() {
+    const ok = await confirmDialog({
+      title: 'Torna al menù principale',
+      text: 'Sei sicuro di voler tornare al menù principale? I progressi vengono salvati automaticamente.',
+      ok: 'Sì, torna al menù',
+      cancel: 'Annulla',
+    });
+    if (ok) this.game.exitToMenu();
   }
 
   render() {
-    const tabs = [['map', 'Mappa'], ['settings', 'Impostazioni'], ['stats', 'Statistiche']];
+    if (this.unbindSettings) { this.unbindSettings(); this.unbindSettings = null; }
+    const v = this.view;
     this.root.innerHTML = `
       <div class="menu-shell">
         <div class="menu-tabs">
           <div class="menu-brand">STREET <em>for</em> PARADISE</div>
-          ${tabs.map(([id, l]) => `<button class="menu-tab ${this.tab === id ? 'on' : ''}" data-esc="tab" data-tab="${id}">${l}</button>`).join('')}
+          <button class="menu-tab ${v === 'map' ? 'on' : ''}" data-esc="view" data-view="map">Mappa</button>
+          <button class="menu-tab ${v === 'stats' ? 'on' : ''}" data-esc="view" data-view="stats">Statistiche</button>
           <div class="menu-spacer"></div>
-          <button class="btn-ghost" data-esc="save">Salva</button>
-          <button class="btn-ghost" data-esc="menu">Menu principale</button>
-          <button class="btn-solid" data-esc="resume">Riprendi</button>
+          ${v === 'pause' ? '<span class="paused-badge">IN PAUSA</span>' : '<span class="live-badge">● Il gioco continua</span>'}
+          <button class="btn-pausa ${v === 'pause' ? 'on' : ''}" data-esc="pause">❚❚ PAUSA</button>
+          <button class="btn-solid" data-esc="resume">Torna al gioco [Esc]</button>
         </div>
         <div class="menu-page" id="esc-page"></div>
       </div>`;
     const page = $('esc-page');
-    if (this.tab === 'map') this.renderMap(page);
-    else if (this.tab === 'settings') this.renderSettings(page);
-    else this.renderStats(page);
+    if (v === 'map') this.renderMap(page);
+    else if (v === 'stats') this.renderStats(page);
+    else this.renderPause(page);
+  }
+
+  /** Chiamato ogni frame dal gioco: la mappa è "live". */
+  update(dt) {
+    if (!this.isOpen || this.view !== 'map') return;
+    this.redraw -= dt;
+    if (this.redraw <= 0) {
+      this.redraw = 0.25;
+      const c = $('big-map');
+      if (c) this.drawMap(c);
+    }
   }
 
   renderMap(page) {
@@ -75,35 +111,35 @@ export class EscMenu {
     const k = S / (EXT * 2);
     const tx = (v) => (v + EXT) * k;
     const md = this.game.world.mapData;
-    g.fillStyle = '#1c1f24';
+    g.fillStyle = '#34502c';
     g.fillRect(0, 0, S, S);
+    g.fillStyle = '#1c1f24';
+    g.fillRect(tx(-URBAN_HALF - 8), tx(-URBAN_HALF - 8), (URBAN_HALF + 8) * 2 * k, (URBAN_HALF + 8) * 2 * k);
+    if (md.lake) { g.fillStyle = '#2f6f8f'; g.beginPath(); g.arc(tx(md.lake.x), tx(md.lake.z), md.lake.r * k, 0, Math.PI * 2); g.fill(); }
     for (const b of md.blocks) {
       g.fillStyle = b.park ? '#3f5f35' : '#3a3d42';
       g.fillRect(tx(b.x - b.size / 2), tx(b.z - b.size / 2), b.size * k, b.size * k);
     }
     for (const b of md.buildings) {
-      g.fillStyle = b.district === 'car' ? '#50555c' : b.district === 'church' ? '#cfc3a8' : '#6f7378';
+      g.fillStyle = b.district === 'car' ? '#50555c' : b.district === 'church' ? '#cfc3a8' : b.district === 'suburb' ? '#b09075' : '#6f7378';
       g.fillRect(tx(b.x - b.w / 2), tx(b.z - b.d / 2), b.w * k, b.d * k);
     }
-    // Persone e senzatetto
     for (const d of this.game.npcs.mapDots()) {
       g.fillStyle = d.kind === 'homeless' ? '#c9a77a' : 'rgba(255,255,255,0.75)';
       g.beginPath();
       g.arc(tx(d.x), tx(d.z), d.kind === 'homeless' ? 4 : 2.5, 0, Math.PI * 2);
       g.fill();
     }
-    // Veicoli del giocatore
     for (const v of this.game.ownedVehicles()) {
       g.fillStyle = '#4fd1c5';
       g.fillRect(tx(v.x) - 4, tx(v.z) - 4, 8, 8);
     }
-    // Edifici utili e bancomat
     const icon = (x, z, type) => {
       const ic = MAP_ICONS[type];
       if (!ic) return;
       g.fillStyle = ic.color;
       g.beginPath();
-      g.arc(tx(x), tx(z), 11, 0, Math.PI * 2);
+      g.arc(tx(x), tx(z), 9, 0, Math.PI * 2);
       g.fill();
       g.fillStyle = '#111';
       g.font = '700 12px Inter, sans-serif';
@@ -113,11 +149,10 @@ export class EscMenu {
     };
     for (const a of this.game.world.atms) icon(a.mx, a.mz, 'atm');
     for (const d of md.doors) icon(d.x, d.z + d.nz * 3, d.type);
-    // Giocatore
     const p = this.game.mapPosition();
     g.save();
     g.translate(tx(p.x), tx(p.z));
-    g.rotate(Math.PI - this.game.player.facing);
+    g.rotate(Math.PI - (this.game.driving ? this.game.driving.heading : this.game.player.facing));
     g.fillStyle = '#ffffff';
     g.strokeStyle = '#000';
     g.lineWidth = 2;
@@ -128,34 +163,22 @@ export class EscMenu {
     g.fillStyle = '#f0b43c';
     g.font = '600 13px Inter, sans-serif';
     g.textAlign = 'left';
-    g.fillText(`${this.game.city.city} · ${this.game.currentPlaceName()}`, 14, 22);
+    g.fillText(`${this.game.city.city} · ${this.game.currentPlaceName()} · ${this.game.clockText()}`, 14, 22);
   }
 
-  renderSettings(page) {
-    const s = this.game.settings;
-    page.innerHTML = `<div class="settings">
-      <label>Sensibilità del mouse <input type="range" min="0.3" max="2.5" step="0.05" value="${s.sensitivity}" data-set="sensitivity"><b>${s.sensitivity.toFixed(2)}×</b></label>
-      <label>Inverti asse Y <input type="checkbox" ${s.invertY ? 'checked' : ''} data-set="invertY"></label>
-      <label>Campo visivo (FOV) <input type="range" min="50" max="90" step="1" value="${s.fov}" data-set="fov"><b>${s.fov}°</b></label>
-      <label>Ombre <select data-set="shadows">${[['high', 'Alte'], ['low', 'Basse'], ['off', 'Disattivate']].map(([v, l]) => `<option value="${v}" ${s.shadows === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label>Qualità grafica <select data-set="quality">${[['high', 'Alta'], ['medium', 'Media'], ['low', 'Bassa']].map(([v, l]) => `<option value="${v}" ${s.quality === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label>Minimappa <input type="checkbox" ${s.showMinimap ? 'checked' : ''} data-set="showMinimap"></label>
-      <p class="muted">Le impostazioni vengono salvate automaticamente su questo browser.</p>
+  renderPause(page) {
+    page.innerHTML = `<div class="pause-grid">
+      <div class="pause-col">
+        <div class="pause-title">Pausa</div>
+        <p class="muted">Il tempo di gioco è fermo. Premi «Torna al gioco» o Esc per riprendere.</p>
+        <button class="btn-pause" data-esc="resume">Riprendi</button>
+        <button class="btn-pause" data-esc="save">Salva partita</button>
+        <button class="btn-pause" data-esc="view" data-view="stats">Statistiche</button>
+        <button class="btn-pause danger" data-esc="menu">Torna al menù principale</button>
+      </div>
+      <div class="pause-col"><div class="pause-title small">Impostazioni</div><div id="pause-settings">${settingsFormHtml(loadSettings())}</div></div>
     </div>`;
-  }
-
-  onSetting(e) {
-    const el = e.target.closest('[data-set]');
-    if (!el) return;
-    const key = el.dataset.set;
-    let value;
-    if (el.type === 'checkbox') value = el.checked;
-    else if (el.type === 'range') value = Number(el.value);
-    else value = el.value;
-    this.game.applySetting(key, value);
-    const b = el.parentElement.querySelector('b');
-    if (b && key === 'sensitivity') b.textContent = value.toFixed(2) + '×';
-    if (b && key === 'fov') b.textContent = value + '°';
+    this.unbindSettings = bindSettingsForm($('pause-settings'));
   }
 
   renderStats(page) {
@@ -166,10 +189,10 @@ export class EscMenu {
     const row = (k, v) => `<div class="cc-item"><span>${k}</span><b>${v}</b></div>`;
     page.innerHTML = `<div class="stats-page">
       <div class="aura-card">
-        <div class="aura-head"><span>AURA</span><b>${aura}%</b></div>
+        <div class="aura-head"><span>AURA · LIVELLO ${st.auraLevel} / ${MAX_AURA_LEVEL}</span><b>${aura}%</b></div>
         <div class="aura-bar"><i style="width:${aura}%"></i></div>
-        <div class="aura-title">${esc(st.auraTitle())}</div>
-        <p class="muted">L'Aura sale con le opere buone (carità, onestà, preghiera, onorare i genitori) e scende con i peccati (furto, inganno, violenza), secondo i Dieci Comandamenti e la dottrina cattolica.</p>
+        <div class="aura-title">${esc(levelTitle(st.auraLevel))} · ${esc(st.auraTitle())}</div>
+        <p class="muted">L'Aura sale con le opere buone (carità, onestà, preghiera, Messa, confessione) e scende con i peccati (furto, inganno, violenza, ubriachezza), secondo i Dieci Comandamenti. Ogni volta che la barra arriva al 100% sali di un Livello Aura: riscatta le ricompense nell'app «Livelli» del telefono. Dal livello ${PARADISE_PREVIEW_LEVEL} intravedi il Paradiso in chiesa, al livello ${PARADISE_LEVEL} incontri Gesù e i tuoi genitori. Se non vai in chiesa per 7 giorni perdi Aura; la Messa nei giorni in rosso del calendario vale +5 Aura extra.</p>
         <ul class="aura-log">${log}</ul>
       </div>
       <div class="stats-grid">
@@ -181,107 +204,105 @@ export class EscMenu {
         ${row('Buone azioni', st.stats.goodDeeds)}${row('Cattive azioni', st.stats.badDeeds)}
         ${row('Donazioni', `${st.stats.donations} (${formatMoney(st.stats.donatedMoney)})`)}${row('Pasti al ristorante', st.stats.meals)}
         ${row('Veicoli rubati', st.stats.stolenVehicles)}${row('Notti in prigione', st.stats.arrests)}
-        ${row('Preghiere', st.stats.prayers)}${row('Notti dormite', st.stats.nightsSlept)}
+        ${row('Preghiere e Messe', st.stats.prayers)}${row('Notti dormite', st.stats.nightsSlept)}
+        ${row('Ultima visita in chiesa', this.game.day - st.lastChurchDay === 0 ? 'Oggi' : `${this.game.day - st.lastChurchDay} giorni fa`)}${row('Case di proprietà', st.houses.length)}
+        ${row('Meccanico', st.jobs.mechanic ? `Assunto · ${st.jobs.repairs} riparazioni` : 'Non assunto')}${row('Guadagni in officina', formatMoney(st.jobs.earned))}
+        ${row('Rapine e scassi', st.stats.robberies)}${row('Colpi sparati', st.stats.shots)}
       </div>
     </div>`;
   }
 }
 
 /* =====================================================================
-   TAB: inventario, portafoglio, telefono
+   TAB: inventario compatto + portafoglio + telefono in basso a sinistra
    ===================================================================== */
+const CATS = [['all', 'Tutto'], ['cibo', 'Cibo'], ['medicinali', 'Medicine'], ['attrezzi', 'Attrezzi'], ['armi', 'Armi'], ['vestiti', 'Vestiti'], ['varie', 'Varie'], ['documenti', 'Documenti']];
+
 export class TabMenu {
   constructor(game) {
     this.game = game;
     this.root = $('tab-menu');
-    this.tab = 'inventory';
+    this.phoneRoot = $('phone-dock');
+    this.cat = 'all';
+    this.selected = null;
     this.phoneScreen = 'home';
-    this.root.addEventListener('click', (e) => {
+    bindUiSounds(this.root);
+    bindUiSounds(this.phoneRoot);
+    const onClick = (e) => {
       const t = e.target.closest('[data-tb]');
       if (t) this.onAction(t.dataset.tb, t.dataset);
-    });
+    };
+    this.root.addEventListener('click', onClick);
+    this.phoneRoot.addEventListener('click', onClick);
   }
 
   get isOpen() {
     return !this.root.classList.contains('hidden');
   }
 
-  open(tab) {
-    if (tab) this.tab = tab;
+  open() {
     this.root.classList.remove('hidden');
+    this.phoneRoot.classList.remove('hidden');
+    this.phoneScreen = 'home';
+    this.game.player.phone = true;
+    this.game.player.updateHeld(this.game.state.equipped);
     this.render();
+    this.renderPhone();
+    audio.phoneNotify();
   }
 
   close() {
     this.root.classList.add('hidden');
+    this.phoneRoot.classList.add('hidden');
     this.game.player.phone = false;
   }
 
   render() {
     const st = this.game.state;
-    const tabs = [['inventory', 'Inventario'], ['wallet', 'Portafoglio'], ['phone', 'Telefono']];
-    // Con la scheda Telefono aperta il personaggio tiene lo smartphone in mano (posa + oggetto)
-    this.game.player.phone = this.tab === 'phone';
-    this.game.player.updateHeld(this.game.state.equipped);
-    this.root.innerHTML = `
-      <div class="tab-shell">
-        <div class="tab-head">
-          ${tabs.map(([id, l]) => `<button class="menu-tab ${this.tab === id ? 'on' : ''}" data-tb="tab" data-tab="${id}">${l}</button>`).join('')}
-          <div class="menu-spacer"></div>
-          <div class="tab-money">${formatMoney(st.cash)}</div>
-          <button class="btn-ghost" data-tb="close">Chiudi [TAB]</button>
-        </div>
-        <div class="tab-page" id="tab-page"></div>
-      </div>`;
-    const page = $('tab-page');
-    if (this.tab === 'inventory') this.renderInventory(page);
-    else if (this.tab === 'wallet') this.renderWallet(page);
-    else this.renderPhone(page);
-  }
-
-  renderInventory(page) {
-    const st = this.game.state;
     const groups = st.groupedInventory();
-    const order = ['cibo', 'medicinali', 'attrezzi', 'armi', 'varie', 'documenti', 'vestiti'];
-    page.innerHTML = `<div class="inv-grid">${order.filter((k) => groups[k] && groups[k].length).map((k) => `
-      <div class="inv-group"><div class="shop-section">${esc(CATEGORY_LABELS[k])}</div>
-        ${groups[k].map((it) => {
-          let actions = '';
-          if (k === 'cibo') actions = `<button class="btn-solid small" data-tb="use" data-id="${it.id}">Mangia/Bevi</button>`;
-          else if (k === 'medicinali') actions = `<button class="btn-solid small" data-tb="use" data-id="${it.id}">Usa</button>`;
-          else if (ITEMS[it.id] && ITEMS[it.id].hold) actions = `<button class="btn-ghost small" data-tb="equip" data-id="${it.id}">${st.equipped === it.id ? 'Riponi' : 'Impugna'}</button>`;
-          else if (k === 'vestiti') actions = `<button class="btn-ghost small" data-tb="wear" data-id="${it.id}" ${it.worn ? 'disabled' : ''}>${it.worn ? 'Indossato' : 'Indossa'}</button>`;
-          else if (it.id === 'carta_credito') actions = `<button class="btn-ghost small" data-tb="pin">Mostra PIN</button>`;
-          return `<div class="inv-row"><span class="inv-icon">${it.icon || '📦'}</span><div class="shop-info"><b>${esc(it.name)}</b><span>${esc(it.desc || '')}</span></div><span class="shop-owned">${k === 'vestiti' ? '' : 'x' + it.qty}</span>${actions}</div>`;
-        }).join('')}</div>`).join('') || '<p class="muted">Inventario vuoto. Fai acquisti nei negozi della città.</p>'}</div>
-      <p class="muted" id="inv-msg"></p>`;
-  }
-
-  renderWallet(page) {
-    const st = this.game.state;
+    let items = [];
+    for (const [cat, list] of Object.entries(groups)) for (const it of list) items.push({ ...it, cat });
+    if (this.cat !== 'all') items = items.filter((i) => i.cat === this.cat);
+    const sel = this.selected ? items.find((i) => i.id === this.selected) : null;
     const near = this.game.nearestNpcForGift();
-    page.innerHTML = `<div class="wallet">
-      <div class="wallet-cash"><span>Contanti nel portafoglio</span><b>${formatMoney(st.cash)}</b></div>
-      <div class="wallet-cards">
-        <div class="credit-card ${st.bank.account && st.has('carta_credito') ? '' : 'off'}">
-          <div class="cc-chip"></div><div class="cc-num">•••• •••• •••• 7312</div>
-          <div class="cc-owner">${esc(this.game.character.name)} ${esc(this.game.character.surname)}</div>
-          <div class="cc-bal">${st.bank.account ? 'Saldo conto ' + formatMoney(st.bank.balance) : 'Nessun conto: vai in banca'}</div>
+    this.root.innerHTML = `
+      <div class="inv-panel">
+        <div class="inv-head">
+          <div><div class="inv-title">Inventario</div><div class="muted">Clicca un oggetto per usarlo · TAB per chiudere</div></div>
+          <div class="inv-wallet"><span>Portafoglio</span><b>${formatMoney(st.cash)}</b>${st.bank.account ? `<small>Conto ${formatMoney(st.bank.balance)}</small>` : ''}</div>
         </div>
-      </div>
-      <div class="shop-section">Cedi / dona soldi</div>
-      ${near
-        ? `<p>Vicino a te: <b>${esc(near.name)}</b>${near.kind === 'homeless' ? ' (senzatetto)' : ''}.</p><div class="chips">${[2, 5, 10, 20, 50, 100].map((a) => `<button class="chip" data-tb="give" data-a="${a}" ${st.cash < a ? 'disabled' : ''}>${formatMoney(a)}</button>`).join('')}</div>
-           ${near.kind === 'homeless' ? '<button class="btn-ghost" data-tb="donatemore">Dona cibo, vestiti, oggetti o veicoli…</button>' : ''}`
-        : '<p class="muted">Avvicinati a una persona (entro 3 metri) per cederle del denaro.</p>'}
-      <p class="muted" id="inv-msg"></p>
-    </div>`;
+        <div class="inv-cats">${CATS.map(([id, l]) => `<button class="${this.cat === id ? 'on' : ''}" data-tb="cat" data-cat="${id}">${l}</button>`).join('')}</div>
+        <div class="inv-tiles">${items.map((it) => `
+          <button class="inv-tile ${this.selected === it.id ? 'on' : ''} ${it.worn || st.equipped === it.id ? 'worn' : ''}" data-tb="sel" data-id="${it.id}">
+            <span class="t-ico">${it.icon || '📦'}</span><span class="t-name">${esc(it.name)}</span>${it.cat !== 'vestiti' ? `<span class="t-qty">x${it.qty}</span>` : ''}
+          </button>`).join('') || '<p class="muted">Nessun oggetto in questa categoria.</p>'}</div>
+        <div class="inv-detail">${sel ? this.detailHtml(sel) : '<span class="muted" style="grid-column: 1 / -1">Seleziona un oggetto per usarlo, impugnarlo o indossarlo.</span>'}</div>
+        <div class="inv-give">
+          ${near
+            ? `<span>Vicino a te: <b>${esc(near.name)}</b>${near.kind === 'homeless' ? ' (senzatetto)' : ''}</span>
+               <div class="chips">${[2, 5, 10, 20, 50].map((a) => `<button class="chip" data-tb="give" data-a="${a}" ${st.cash < a ? 'disabled' : ''}>Dona ${formatMoney(a)}</button>`).join('')}
+               ${near.kind === 'homeless' ? '<button class="chip" data-tb="donatemore">Altri doni…</button>' : ''}</div>`
+            : '<span class="muted">Avvicinati a una persona per cederle denaro.</span>'}
+        </div>
+        <p class="inv-msg" id="inv-msg"></p>
+      </div>`;
   }
 
-  renderPhone(page) {
+  detailHtml(it) {
+    const st = this.game.state;
+    let actions = '';
+    if (it.cat === 'cibo') actions = `<button class="btn-solid small" data-tb="use" data-id="${it.id}">Mangia / Bevi</button>`;
+    else if (it.cat === 'medicinali') actions = `<button class="btn-solid small" data-tb="use" data-id="${it.id}">Usa</button>`;
+    else if (ITEMS[it.id] && ITEMS[it.id].hold) actions = `<button class="btn-solid small" data-tb="equip" data-id="${it.id}">${st.equipped === it.id ? 'Riponi' : 'Impugna'}</button>`;
+    else if (it.cat === 'vestiti') actions = `<button class="btn-solid small" data-tb="wear" data-id="${it.id}" ${it.worn ? 'disabled' : ''}>${it.worn ? 'Indossato' : 'Indossa'}</button>`;
+    else if (it.id === 'carta_credito') actions = '<button class="btn-ghost small" data-tb="pin">Mostra PIN</button>';
+    return `<div class="det-ico">${it.icon || '📦'}</div><div class="det-info"><b>${esc(it.name)}</b><span>${esc(it.desc || '')}${it.heal ? ` · +${it.heal} salute` : ''}</span></div>${actions}`;
+  }
+
+  renderPhone() {
     const st = this.game.state;
     const contacts = [
-      ['mom', '👩', 'Mamma', 'Chiama casa'],
+      ['priest', '⛪', 'Don Michele', 'Parroco · conforto e preghiera'],
       ['dealer', '🚗', 'Concessionario', 'Ordina un veicolo con consegna'],
       ['bank', '🏦', 'Banca', 'Saldo e informazioni'],
       ['taxi', '🚕', 'Radio Taxi', 'Portami a…'],
@@ -294,26 +315,53 @@ export class TabMenu {
       screen = `<div class="ph-apps">
         <button data-tb="ph" data-s="contacts"><span>📞</span>Contatti</button>
         <button data-tb="ph" data-s="notes"><span>📝</span>Note</button>
-        <button data-tb="ph" data-s="map"><span>🗺️</span>Mappa</button>
-        <button data-tb="ph" data-s="aura"><span>✨</span>Aura</button></div>`;
+        <button data-tb="ph" data-s="memories"><span>🖼️</span>Ricordi</button>
+        <button data-tb="ph" data-s="aura"><span>✨</span>Aura</button>
+        <button data-tb="ph" data-s="levels" class="${this.game.pendingRewards().length ? 'badge' : ''}"><span>🏆</span>Livelli</button>
+        <button data-tb="mapapp"><span>🗺️</span>Mappa</button>
+        <button data-tb="ph" data-s="bank"><span>💳</span>Wallet</button></div>`;
+    } else if (this.phoneScreen === 'levels') {
+      const lvl = st.auraLevel;
+      const upTo = Math.min(MAX_AURA_LEVEL, Math.max(lvl + 5, 10));
+      const rows = [];
+      for (let l = 1; l <= upTo; l++) {
+        const r = rewardFor(l);
+        const claimed = st.rewardsClaimed.includes(l);
+        const status = claimed
+          ? '<em class="lv-done">✓ Riscattata</em>'
+          : l <= lvl ? `<span class="chip lv-claim" data-tb="claim" data-l="${l}">Riscatta</span>` : '<em class="lv-lock">🔒</em>';
+        rows.push(`<div class="lv-row ${l <= lvl ? 'on' : ''}"><b>${l}</b><span>${esc(r.label)}</span>${status}</div>`);
+      }
+      if (upTo < MAX_AURA_LEVEL) {
+        const r = rewardFor(MAX_AURA_LEVEL);
+        rows.push(`<div class="lv-row final"><b>${MAX_AURA_LEVEL}</b><span>${esc(r.label)}</span><em class="lv-lock">🔒</em></div>`);
+      }
+      screen = `<div class="ph-note lv-head"><b>Livello Aura ${lvl} / ${MAX_AURA_LEVEL}</b><small>${esc(levelTitle(lvl))} · barra ${Math.round(st.aura)}%</small>
+        <div class="aura-bar"><i style="width:${Math.round(st.aura)}%"></i></div></div>
+        <div class="lv-list">${rows.join('')}</div><p class="lv-msg" id="lv-msg">${esc(this.levelMsg || '')}</p>`;
     } else if (this.phoneScreen === 'contacts') {
       screen = `<div class="ph-list">${contacts.map(([id, ic, name, sub]) => `<button data-tb="call" data-id="${id}"><span>${ic}</span><b>${name}</b><small>${sub}</small></button>`).join('')}</div>`;
     } else if (this.phoneScreen === 'notes') {
-      screen = `<div class="ph-note"><b>Note</b><p>${st.bank.pin ? `PIN carta di credito: <b>${st.bank.pin}</b>` : 'Nessuna nota. Apri un conto in banca per ricevere la carta.'}</p><p>Casa: quartiere ${esc(this.game.homeDistrictName())}.</p></div>`;
+      screen = `<div class="ph-note"><b>Note</b><p>${st.bank.pin ? `PIN carta: <b>${st.bank.pin}</b>` : 'Apri un conto in banca per ricevere la carta.'}</p><p>Casa: ${esc(this.game.homeDistrictName())}.</p></div>`;
+    } else if (this.phoneScreen === 'memories') {
+      screen = `<div class="ph-note"><b>Ricordi</b><p>Mamma e papà ti guardano da lassù. Al Livello Aura ${PARADISE_LEVEL} potrai incontrare Gesù e rivivere i ricordi d'infanzia in Paradiso, dalla chiesa.</p><p>Livello attuale: ${st.auraLevel} · Aura ${Math.round(st.aura)}%</p></div>`;
     } else if (this.phoneScreen === 'aura') {
-      screen = `<div class="ph-note"><b>Aura ${Math.round(st.aura)}%</b><div class="aura-bar"><i style="width:${Math.round(st.aura)}%"></i></div><p>${esc(st.auraTitle())}</p></div>`;
+      const since = this.game.day - st.lastChurchDay;
+      screen = `<div class="ph-note"><b>Aura ${Math.round(st.aura)}% · Liv. ${st.auraLevel}</b><div class="aura-bar"><i style="width:${Math.round(st.aura)}%"></i></div><p>${esc(st.auraTitle())}</p>
+        <p>Ultima volta in chiesa: ${since === 0 ? 'oggi' : `${since} giorni fa`}${since >= 5 ? ' — torna presto o perderai Aura!' : ''}</p></div>`;
+    } else if (this.phoneScreen === 'bank') {
+      screen = `<div class="ph-note"><b>Wallet</b><p>Contanti: ${formatMoney(st.cash)}</p><p>${st.bank.account ? `Conto: ${formatMoney(st.bank.balance)}` : 'Nessun conto corrente.'}</p></div>`;
     } else if (this.phoneScreen === 'taxi') {
-      screen = `<div class="ph-list">${this.game.world.doors.map((d, i) => `<button data-tb="taxi" data-i="${i}"><span>📍</span><b>${esc(d.name)}</b><small>${formatMoney(this.game.taxiFare(d))}</small></button>`).join('')}</div>`;
+      // Le case in vendita non compaiono tra le destinazioni (solo quelle di tua proprietà)
+      screen = `<div class="ph-list">${this.game.world.doors.map((d, i) => (d.type === 'house' && !st.houses.includes(d.house.id) ? '' : `<button data-tb="taxi" data-i="${i}"><span>📍</span><b>${esc(d.name)}</b><small>${formatMoney(this.game.taxiFare(d))}</small></button>`)).join('')}</div>`;
     } else if (this.phoneScreen === 'call') {
       screen = `<div class="ph-call"><div class="ph-avatar">${this.callIcon}</div><b>${esc(this.callName)}</b><p>${this.callText}</p></div>`;
-    } else if (this.phoneScreen === 'map') {
-      screen = `<div class="ph-note"><b>Mappa</b><p>La mappa grande è nel menu <b>ESC → Mappa</b>.</p><p>Ti trovi a: ${esc(this.game.currentPlaceName())}</p></div>`;
     }
-    page.innerHTML = `<div class="phone-wrap"><div class="phone">
+    this.phoneRoot.innerHTML = `<div class="phone small">
       <div class="ph-status"><span>${this.game.clockText()}</span><span>📶 🔋</span></div>
       <div class="ph-screen">${screen}</div>
-      <div class="ph-nav"><button data-tb="ph" data-s="home">◯</button>${this.phoneScreen !== 'home' ? '<button data-tb="ph" data-s="back">‹ Indietro</button>' : ''}</div>
-    </div><p class="muted">Il personaggio tiene il telefono in mano mentre è aperto.</p></div>`;
+      <div class="ph-nav"><button data-tb="ph" data-s="home">◯</button>${this.phoneScreen !== 'home' ? '<button data-tb="ph" data-s="back">‹</button>' : ''}</div>
+    </div>`;
   }
 
   /** Mostra una "chiamata" sul telefono. */
@@ -322,7 +370,9 @@ export class TabMenu {
     this.callName = name;
     this.callText = text;
     this.phoneScreen = 'call';
-    this.render();
+    this.renderPhone();
+    audio.phoneRing();
+    setTimeout(() => audio.voice(Math.random() < 0.5, 10), 1200);
   }
 
   onAction(a, d) {
@@ -330,14 +380,9 @@ export class TabMenu {
     const st = g.state;
     const msg = (t) => { const el = $('inv-msg'); if (el) el.textContent = t; };
     switch (a) {
-      case 'tab': this.tab = d.tab; this.phoneScreen = 'home'; this.render(); break;
-      case 'close': g.closeTabMenu(); break;
-      case 'use': {
-        const r = g.useItem(d.id);
-        this.render();
-        msg(r);
-        break;
-      }
+      case 'cat': this.cat = d.cat; this.selected = null; this.render(); break;
+      case 'sel': this.selected = d.id; this.render(); break;
+      case 'use': { const r = g.useItem(d.id); this.render(); msg(r); break; }
       case 'equip':
         st.equipped = st.equipped === d.id ? null : d.id;
         g.player.updateHeld(st.equipped);
@@ -347,17 +392,18 @@ export class TabMenu {
         const info = itemInfo(d.id);
         st.outfit[info.slot] = d.id;
         g.refreshOutfit();
+        g.player.phone = true;
+        g.player.updateHeld(st.equipped);
         this.render();
         break;
       }
-      case 'pin':
-        msg(st.bank.pin ? `PIN della carta: ${st.bank.pin}` : 'Nessun PIN.');
-        break;
+      case 'pin': msg(st.bank.pin ? `PIN della carta: ${st.bank.pin}` : 'Nessun PIN.'); break;
       case 'give': {
         const npc = g.nearestNpcForGift();
         const amount = Number(d.a);
         if (npc && st.pay(amount)) {
           g.onDonate(npc, { kind: 'money', amount });
+          audio.cash();
           this.render();
           msg(`Hai dato ${formatMoney(amount)} a ${npc.name}.`);
         }
@@ -371,8 +417,13 @@ export class TabMenu {
       }
       case 'ph':
         this.phoneScreen = d.s === 'back' ? (this.phoneScreen === 'taxi' || this.phoneScreen === 'call' ? 'contacts' : 'home') : d.s;
-        this.render();
+        this.renderPhone();
         break;
+      case 'claim':
+        this.levelMsg = g.claimReward(Number(d.l));
+        if (this.isOpen) { this.render(); this.renderPhone(); }
+        break;
+      case 'mapapp': g.closeTabMenu(); g.openMap(); break;
       case 'call': g.phoneCall(d.id, this); break;
       case 'taxi': g.taxiTo(g.world.doors[Number(d.i)]); break;
       default: break;

@@ -285,7 +285,19 @@ export class Vehicle {
     this.mesh = built.group;
     this.wheels = built.wheels;
     this.steerNodes = built.steerNodes;
+    this.mesh.userData.vehicle = this; // per il raycast dei proiettili
+    this.police = !!o.police;
+    if (this.police) this.addPoliceLivery();
     scene.add(this.mesh);
+    // Parti deformabili (carrozzeria, paraurti, luci): si piegano/spostano con gli urti
+    this.deformables = this.mesh.children.filter((c) => c.isMesh && !this.wheels.some((w) => w.node === c)).map((m) => ({
+      m, pos: m.position.clone(), rot: m.rotation.clone(), off: new THREE.Vector3(), tilt: new THREE.Vector3(),
+    }));
+    this.health = THREE.MathUtils.clamp(o.health ?? 100, 0, 100);
+    this.broken = this.health <= 0;
+    this.wheelie = 0;
+    this.looted = false;
+    if (this.health < 100) this.applyDeformation(100 - this.health, true);
 
     const s = this.spec;
     this.body = new CANNON.Body({ mass: s.mass, allowSleep: false, linearDamping: 0.02, angularDamping: 0.6 });
@@ -313,6 +325,119 @@ export class Vehicle {
     this.occupied = false;
     this.impact = 0;
     this.lean = 0;
+    this.isStatic = false;
+    this.settle = 0; // tempo per appoggiarsi al suolo prima di diventare statico
+  }
+
+  /** Volante della polizia: bande blu, scritta POLIZIA e lampeggianti sul tetto. */
+  addPoliceLivery() {
+    const s = this.spec;
+    const k = s.h / 1.45;
+    const blue = new THREE.MeshStandardMaterial({ color: 0x1d3f8f, roughness: 0.4, metalness: 0.3 });
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 96;
+    const g = c.getContext('2d');
+    g.fillStyle = '#1d3f8f'; g.fillRect(0, 0, 512, 96);
+    g.fillStyle = '#ffffff'; g.font = '700 64px Oswald, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('POLIZIA', 256, 52);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const textMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5 });
+    for (const sx of [-1, 1]) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.16, s.len * 0.82), blue);
+      stripe.position.set(sx * (s.wid / 2 + 0.005), 0.5 * k, 0);
+      const label = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.28), textMat);
+      label.position.set(sx * (s.wid / 2 + 0.02), 0.72 * k, -0.2);
+      label.rotation.y = sx * Math.PI / 2;
+      this.mesh.add(stripe, label);
+    }
+    this.sirenRed = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff2020, emissiveIntensity: 0.2 });
+    this.sirenBlue = new THREE.MeshStandardMaterial({ color: 0x000a40, emissive: 0x2a5bff, emissiveIntensity: 0.2 });
+    const base = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.08, 0.3), new THREE.MeshStandardMaterial({ color: 0x1a1a1a }));
+    base.position.set(0, s.h + 0.04, -0.1);
+    const red = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.26), this.sirenRed);
+    red.position.set(-0.28, s.h + 0.12, -0.1);
+    const bl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.26), this.sirenBlue);
+    bl.position.set(0.28, s.h + 0.12, -0.1);
+    this.mesh.add(base, red, bl);
+    this.sirenOn = false;
+    this.sirenT = 0;
+  }
+
+  /**
+   * Danni da urto: la salute scende e la carrozzeria si deforma progressivamente.
+   * @returns {number} danno effettivo
+   */
+  applyDamage(amount) {
+    if (amount <= 0 || this.health <= 0) return 0;
+    const before = this.health;
+    this.health = Math.max(0, this.health - amount);
+    this.applyDeformation(before - this.health);
+    if (this.health <= 0) {
+      this.broken = true;
+      this.speed = 0;
+    }
+    return before - this.health;
+  }
+
+  /** Sposta e inclina in modo casuale alcune parti della carrozzeria (ammaccature). */
+  applyDeformation(amount, silent = false) {
+    const n = Math.max(1, Math.round(amount / 8));
+    for (let i = 0; i < n && this.deformables.length; i++) {
+      const d = this.deformables[Math.floor(Math.random() * this.deformables.length)];
+      const k = Math.min(1, amount / 30) * (silent ? 0.6 : 1);
+      d.off.x = THREE.MathUtils.clamp(d.off.x + (Math.random() - 0.5) * 0.05 * k, -0.08, 0.08);
+      d.off.y = THREE.MathUtils.clamp(d.off.y - Math.random() * 0.04 * k, -0.08, 0.02);
+      d.off.z = THREE.MathUtils.clamp(d.off.z + (Math.random() - 0.5) * 0.06 * k, -0.1, 0.1);
+      d.tilt.x = THREE.MathUtils.clamp(d.tilt.x + (Math.random() - 0.5) * 0.12 * k, -0.18, 0.18);
+      d.tilt.z = THREE.MathUtils.clamp(d.tilt.z + (Math.random() - 0.5) * 0.12 * k, -0.18, 0.18);
+      d.m.position.copy(d.pos).add(d.off);
+      d.m.rotation.set(d.rot.x + d.tilt.x, d.rot.y, d.rot.z + d.tilt.z);
+    }
+  }
+
+  /** Riparazione completa (officina). */
+  repair() {
+    this.health = 100;
+    this.broken = false;
+    for (const d of this.deformables) {
+      d.off.set(0, 0, 0);
+      d.tilt.set(0, 0, 0);
+      d.m.position.copy(d.pos);
+      d.m.rotation.copy(d.rot);
+    }
+  }
+
+  /** Punto del motore (locale) da cui esce il fumo. */
+  smokePoint() {
+    const s = this.spec;
+    return s.ride ? new THREE.Vector3(0, 0.55, 0.1) : new THREE.Vector3(0, s.h * 0.62, s.len / 2 - 0.7);
+  }
+
+  /** Parcheggiato: corpo statico (massa infinita), il giocatore non lo spinge più. */
+  makeStatic() {
+    if (this.isStatic) return;
+    const b = this.body;
+    b.velocity.set(0, 0, 0);
+    b.angularVelocity.set(0, 0, 0);
+    b.type = CANNON.Body.STATIC;
+    b.mass = 0;
+    b.updateMassProperties();
+    b.aabbNeedsUpdate = true;
+    this.isStatic = true;
+    this.speed = 0;
+  }
+
+  /** Alla guida: corpo dinamico con la sua massa reale. */
+  makeDynamic() {
+    if (!this.isStatic) return;
+    const b = this.body;
+    b.type = CANNON.Body.DYNAMIC;
+    b.mass = this.spec.mass;
+    b.updateMassProperties();
+    b.wakeUp();
+    this.isStatic = false;
+    this.settle = 0;
   }
 
   get heading() {
@@ -351,20 +476,41 @@ export class Vehicle {
    * @param {{ throttle: boolean, brake: boolean, steer: number, handbrake: boolean } | null} ctl
    */
   update(dt, ctl) {
+    if (ctl || this.occupied) this.makeDynamic();
+    if (this.isStatic) return;
+    if (!ctl && !this.occupied) {
+      // Appena lasciato (o appena comparso): si ferma, si appoggia a terra e poi diventa statico
+      this.settle += dt;
+      if (this.settle > 0.8 && Math.abs(this.speed) < 0.15 && Math.abs(this.body.velocity.y) < 0.2) {
+        this.makeStatic();
+        return;
+      }
+    } else {
+      this.settle = 0;
+    }
     const s = this.spec;
     const h = this.heading;
     const fx = Math.sin(h), fz = Math.cos(h);
     const v = this.body.velocity;
     const measured = v.x * fx + v.z * fz;
     const lost = Math.abs(this.speed) - Math.abs(measured);
-    this.impact = this.occupied && lost > 6 ? lost : 0;
+    this.impact = (this.occupied || ctl) && lost > 6 ? lost : 0;
+    // Danni progressivi in base alla forza dell'urto
+    if (this.impact > 0) this.applyDamage((this.impact - 4) * (s.ride ? 3.2 : 2.4));
     let speed = measured;
+    // Motore danneggiato: meno potenza e velocità; in panne non accelera più
+    const power = this.broken ? 0 : this.health < 50 ? 0.45 + this.health / 100 : 1;
+    const vmax = s.maxSpeed * (this.health < 50 ? 0.55 + this.health / 110 : 1);
 
     if (ctl) {
-      this.steer += (ctl.steer - this.steer) * Math.min(1, dt * 6);
-      if (ctl.throttle) {
+      // Impennata (Shift) su moto, motorini e bici: si alza la ruota anteriore
+      const wantWheelie = s.ride && ctl.wheelie && speed > 2.5 && !this.broken;
+      this.wheelie += ((wantWheelie ? (this.kind === 'moto' ? 0.62 : 0.45) : 0) - this.wheelie) * Math.min(1, dt * (wantWheelie ? 2.6 : 4.5));
+      const steerIn = ctl.steer * (1 - Math.min(0.7, this.wheelie));
+      this.steer += (steerIn - this.steer) * Math.min(1, dt * 6);
+      if (ctl.throttle && power > 0) {
         if (speed < -0.4) speed += s.brake * dt;
-        else speed += s.accel * dt * Math.max(0.15, 1 - speed / s.maxSpeed);
+        else speed += s.accel * power * dt * Math.max(0.15, 1 - speed / vmax);
       } else if (ctl.brake) {
         if (speed > 0.4) speed -= s.brake * dt;
         else speed -= s.reverseAccel * dt;
@@ -374,9 +520,10 @@ export class Vehicle {
       if (ctl.handbrake) speed -= Math.sign(speed) * Math.min(Math.abs(speed), s.brake * 1.4 * dt);
     } else {
       this.steer += (0 - this.steer) * Math.min(1, dt * 4);
+      this.wheelie += (0 - this.wheelie) * Math.min(1, dt * 4);
       speed -= Math.sign(speed) * Math.min(Math.abs(speed), 7 * dt);
     }
-    speed = THREE.MathUtils.clamp(speed, -s.reverseMax, s.maxSpeed);
+    speed = THREE.MathUtils.clamp(speed, -s.reverseMax, Math.max(vmax, Math.min(speed, s.maxSpeed)));
     const yawRate = this.steer * s.steer * THREE.MathUtils.clamp(speed / 5, -1, 1) / (1 + Math.abs(speed) / 30);
     v.x = fx * speed;
     v.z = fz * speed;
@@ -392,13 +539,28 @@ export class Vehicle {
     this.mesh.position.set(p.x, p.y, p.z);
     this.mesh.quaternion.set(this.body.interpolatedQuaternion.x, this.body.interpolatedQuaternion.y, this.body.interpolatedQuaternion.z, this.body.interpolatedQuaternion.w);
     if (this.spec.ride) {
-      const targetLean = THREE.MathUtils.clamp(-(this.yawRate || 0) * this.speed * 0.045, -0.45, 0.45);
-      this.lean += (targetLean - this.lean) * Math.min(1, dt * 6);
+      // Piega in curva stile MotoGP (più marcata sulle moto) e impennata attorno all'asse posteriore
+      const maxLean = this.kind === 'moto' ? 0.62 : this.kind === 'scooter' ? 0.48 : 0.4;
+      const targetLean = this.isStatic ? 0 : THREE.MathUtils.clamp(-(this.yawRate || 0) * this.speed * 0.06, -maxLean, maxLean);
+      this.lean += (targetLean - this.lean) * Math.min(1, dt * 5);
       this.mesh.rotateZ(this.lean);
+      if (this.wheelie > 0.005) {
+        const half = this.spec.wheelBase / 2;
+        this.mesh.translateZ(-half);
+        this.mesh.rotateX(-this.wheelie);
+        this.mesh.translateZ(half);
+      }
     }
     this.wheelSpin += (this.speed / this.spec.wheelR) * dt;
     for (const w of this.wheels) w.node.rotation.x = this.wheelSpin;
     for (const n of this.steerNodes) n.rotation.y = this.steer * 0.45;
+    if (this.police) {
+      this.sirenT += dt;
+      const on = this.sirenOn;
+      const phase = Math.floor(this.sirenT * 6) % 2;
+      this.sirenRed.emissiveIntensity = on ? (phase ? 3 : 0.2) : 0.2;
+      this.sirenBlue.emissiveIntensity = on ? (phase ? 0.2 : 3) : 0.2;
+    }
   }
 
   dispose() {
@@ -408,12 +570,98 @@ export class Vehicle {
   }
 }
 
+/** Fumo (grigio → nero) e fiammelle dai motori danneggiati: pool di sprite riutilizzati. */
+export class SmokeFX {
+  constructor(scene, count = 140) {
+    this.scene = scene;
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, 'rgba(255,255,255,1)');
+    grd.addColorStop(0.5, 'rgba(255,255,255,0.45)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 64, 64);
+    this.tex = new THREE.CanvasTexture(c);
+    this.group = new THREE.Group();
+    scene.add(this.group);
+    this.parts = [];
+    for (let i = 0; i < count; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex, transparent: true, depthWrite: false, opacity: 0 }));
+      s.visible = false;
+      this.group.add(s);
+      this.parts.push({ s, life: 0, max: 1, vel: new THREE.Vector3(), size: 1, fire: false });
+    }
+    this.next = 0;
+  }
+
+  emit(pos, damage, fire = false) {
+    const p = this.parts[this.next];
+    this.next = (this.next + 1) % this.parts.length;
+    p.s.position.copy(pos);
+    p.vel.set((Math.random() - 0.5) * 0.4, (fire ? 1.6 : 1.1) + Math.random() * 0.6, (Math.random() - 0.5) * 0.4);
+    p.max = p.life = fire ? 0.45 : 1.8 + damage * 1.5;
+    p.size = fire ? 0.35 : 0.5 + damage * 0.6;
+    p.fire = fire;
+    const shade = fire ? 1 : 0.75 - damage * 0.62;
+    p.s.material.color.setRGB(fire ? 1 : shade, fire ? 0.55 : shade, fire ? 0.15 : shade);
+    p.s.material.blending = fire ? THREE.AdditiveBlending : THREE.NormalBlending;
+    p.s.visible = true;
+  }
+
+  update(dt) {
+    for (const p of this.parts) {
+      if (p.life <= 0) continue;
+      p.life -= dt;
+      if (p.life <= 0) { p.s.visible = false; continue; }
+      const k = 1 - p.life / p.max;
+      p.s.position.addScaledVector(p.vel, dt);
+      p.vel.x += 0.25 * dt; // un filo di vento
+      const sc = p.size * (1 + k * (p.fire ? 0.2 : 2.4));
+      p.s.scale.set(sc, sc, sc);
+      p.s.material.opacity = (p.fire ? 0.9 : 0.55) * (1 - k);
+    }
+  }
+
+  setVisible(v) {
+    this.group.visible = v;
+  }
+
+  dispose() {
+    this.scene.remove(this.group);
+    for (const p of this.parts) p.s.material.dispose();
+    this.tex.dispose();
+  }
+}
+
 /** Gestisce tutti i veicoli: parcheggiati (non tuoi), acquistati, rubati. */
 export class VehicleManager {
   constructor(scene, physics) {
     this.scene = scene;
     this.physics = physics;
     this.list = [];
+    this.smoke = new SmokeFX(scene);
+    this._p = new THREE.Vector3();
+  }
+
+  /** Emette fumo/fuoco dai veicoli danneggiati vicini al punto di vista. */
+  updateSmoke(dt, near, extra = []) {
+    for (const v of [...this.list, ...extra]) {
+      if (v.health >= 55 || !v.mesh.visible) continue;
+      const p = v.body.position;
+      if (near && Math.abs(p.x - near.x) + Math.abs(p.z - near.z) > 140) continue;
+      const dmg = 1 - v.health / 55;
+      v.smokeT = (v.smokeT || 0) - dt;
+      if (v.smokeT <= 0) {
+        v.smokeT = 0.32 - dmg * 0.22;
+        this._p.copy(v.smokePoint());
+        v.mesh.localToWorld(this._p);
+        this.smoke.emit(this._p, dmg);
+        if (v.health < 15) this.smoke.emit(this._p, dmg, true);
+      }
+    }
+    this.smoke.update(dt);
   }
 
   add(opts) {
@@ -465,7 +713,7 @@ export class VehicleManager {
     return this.list
       .filter((v) => v.owner === 'player' || v.owner === 'stolen')
       .map((v) => ({
-        uid: v.uid, model: v.model, color: v.color, owner: v.owner,
+        uid: v.uid, model: v.model, color: v.color, owner: v.owner, health: Math.round(v.health),
         x: +v.body.position.x.toFixed(2), z: +v.body.position.z.toFixed(2), heading: +v.heading.toFixed(3),
       }));
   }
@@ -473,5 +721,6 @@ export class VehicleManager {
   dispose() {
     for (const v of this.list) v.dispose();
     this.list = [];
+    this.smoke.dispose();
   }
 }

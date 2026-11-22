@@ -262,6 +262,34 @@ export class Interior {
     return l;
   }
 
+  /** Calendario da parete (mese corrente illustrato, domeniche e feste in rosso). */
+  calendar(x, y, z, rotY = 0) {
+    const tex = (() => {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 320;
+      const g = c.getContext('2d');
+      g.fillStyle = '#fbf8f1'; g.fillRect(0, 0, 256, 320);
+      g.fillStyle = '#3a5a8a'; g.fillRect(0, 0, 256, 110);
+      g.fillStyle = '#d9c59a'; g.beginPath(); g.arc(128, 60, 34, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#fbf8f1'; g.fillRect(124, 36, 8, 50); g.fillRect(108, 50, 40, 8);
+      g.fillStyle = '#b3122a'; g.font = '600 22px Oswald, sans-serif'; g.textAlign = 'center'; g.fillText('CALENDARIO', 128, 136);
+      for (let i = 0; i < 35; i++) {
+        const col = i % 7, row = Math.floor(i / 7);
+        g.fillStyle = col === 6 || i === 14 || i === 25 ? '#c0182b' : '#333';
+        g.font = '14px Inter, sans-serif';
+        g.fillText(String(i + 1 > 31 ? '' : i + 1), 22 + col * 35, 170 + row * 30);
+      }
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    })();
+    const m = this.mesh(new THREE.PlaneGeometry(0.42, 0.52), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9 }), x, y, z, rotY);
+    m.castShadow = false;
+    const nail = this.mesh(new THREE.SphereGeometry(0.012, 6, 6), std(0x777777, { metalness: 0.8 }), x, y + 0.28, z);
+    nail.castShadow = false;
+    return m;
+  }
+
   sign(text, color, w, h, x, y, z, rotY = 0, bg) {
     const mat = new THREE.MeshBasicMaterial({ map: signTexture(text, color, bg), toneMapped: false });
     return this.mesh(new THREE.PlaneGeometry(w, h), mat, x, y, z, rotY);
@@ -518,6 +546,9 @@ const BUILDERS = {
     } else {
       I.interact(-w / 2 + 2.3, 1.2, 'dormire fino al mattino', 'sleep', { lie: I.toWorld(-w / 2 + 1.2, 0.34, 2.15), facing: 0 }, 1.6);
     }
+    // Calendario da parete
+    I.calendar(-w / 2 + 0.03, 1.65, -d / 2 + 2.0, Math.PI / 2);
+    I.interact(-w / 2 + 1.0, -d / 2 + 2.0, 'guardare il calendario', 'calendar', {}, 1.2);
     // Tavolo da pranzo
     I.table(w / 2 - 2.2, d / 2 - 3.0, 1.4, 0.9, tier === 'poor' ? 0x6e5c47 : 0x8a6a4c);
     I.chair(w / 2 - 2.7, d / 2 - 2.25, Math.PI, 0x5a3e2b);
@@ -557,7 +588,7 @@ const BUILDERS = {
     I.box(6.1, 0.05, 0.95, std(0x3f8f80, { roughness: 0.3 }), 0, 1.13, -3);
     I.box(0.5, 0.35, 0.05, std(0x111111), -1.2, 1.35, -3.3);
     I.npc({ skin: I.randomSkin(), shirt: 0xe6f0ee, pants: 0xe6f0ee, hair: 0x2a2018, sex: 'f' }, -0.5, -4.2, 0);
-    I.interact(-0.5, -2.1, 'farti visitare (cure complete $150)', 'hospital', {}, 1.8);
+    I.interact(-0.5, -2.1, 'farti visitare (cure complete € 150)', 'hospital', {}, 1.8);
     I.npc({ skin: I.randomSkin(), shirt: 0x3f8f80, pants: 0x3f8f80, hair: 0x1a1410, sex: 'm' }, 1.6, -4.4, -0.3);
     I.sign('ACCETTAZIONE', '#9df5dc', 4, 0.6, 0, 3.2, -d / 2 + 0.02, 0);
     I.sign('PRONTO SOCCORSO  →', '#ff6b6b', 3.6, 0.5, w / 2 - 0.02, 2.8, -3, -Math.PI / 2);
@@ -676,7 +707,7 @@ const BUILDERS = {
     I.car(5.5, -4.4, -0.35, colors[Math.floor(rng() * colors.length)], 0.15);
     for (let i = 0; i < 3; i++) {
       const price = 8000 + Math.floor(rng() * 40) * 1000;
-      I.sign(`$${price.toLocaleString('it-IT')}`, '#f0b43c', 1.4, 0.35, -5.5 + i * 5.5, 0.6, -0.9, 0);
+      I.sign(`€ ${price.toLocaleString('it-IT')}`, '#f0b43c', 1.4, 0.35, -5.5 + i * 5.5, 0.6, -0.9, 0);
     }
     // Ponte sollevatore con auto
     const liftMat = std(0xd9a62b, { metalness: 0.5, roughness: 0.4 });
@@ -695,6 +726,83 @@ const BUILDERS = {
     I.npc({ skin: I.randomSkin(), shirt: 0x2b4a6e, pants: 0x2b4a6e, hair: 0x1b1410, sex: 'm' }, 3.8, 3.4, -1.2);
     I.npc({ skin: I.randomSkin(), shirt: 0xf2f2f2, pants: 0x22262e, hair: 0x2a2018, sex: rng() < 0.5 ? 'm' : 'f', sleeves: 'long' }, -2.5, -0.2, 0.4);
     I.interact(-2.5, 1.0, 'parlare con il venditore', 'dealer', {}, 1.9);
+    // Secondo addetto: valutazione e ritiro dell'usato (vendi i tuoi veicoli)
+    I.box(1.6, 0.95, 0.7, std(0xe9ecef, { roughness: 0.35 }), 3.2, 0.475, -0.6, { solid: true, shadow: true });
+    I.box(0.5, 0.32, 0.03, std(0x111214, { metalness: 0.4, roughness: 0.3 }), 3.2, 1.12, -0.75);
+    I.sign('RITIRO USATO', '#7dff9a', 1.6, 0.32, 3.2, 1.75, -0.95, 0, 'rgba(8,30,16,0.95)');
+    I.npc({ skin: I.randomSkin(), shirt: 0x1f2f55, pants: 0x22262e, hair: 0x4a2f1d, sex: rng() < 0.5 ? 'm' : 'f', sleeves: 'long', glasses: true }, 3.2, -1.35, 0);
+    I.interact(3.2, 0.4, 'vendere un tuo veicolo (ritiro usato)', 'sellcar', {}, 1.6);
+    return { w, d, h };
+  },
+
+  /* ---------------- OFFICINA MECCANICA ---------------- */
+  workshop(I, ctx) {
+    const rng = I.rng;
+    const w = 24, d = 20, h = 7;
+    const floorTex = TEX.concrete(0x7d7a74, rng, 4, 4, 30);
+    const floorMat = std(0xffffff, { map: floorTex, bumpMap: floorTex, bumpScale: 1, roughness: 0.8 });
+    const wallTex = TEX.concrete(0xa9a59c, rng, 4, 1, 6);
+    const wallMat = std(0xffffff, { map: wallTex, bumpMap: wallTex, bumpScale: 0.5, roughness: 0.9 });
+    I.room({ w, d, h, floorMat, wallMat, ceilMat: std(0x4a4d52, { roughness: 1 }), trim: 0x3a2a12 });
+    I.ambient(0xf2f6ff, 0x55524c, 0.5);
+    for (const x of [-6, 6]) for (const z of [-4, 4]) I.light(x, h - 0.5, z, 0xf4f8ff, 26, { fixture: 'panel', shadow: x === -6 && z === -4 });
+    I.sign('OFFICINA MECCANICA', '#ffb347', 7, 0.8, 0, h - 1.1, -d / 2 + 0.02, 0, 'rgba(28,18,6,0.95)');
+
+    // Due baie di lavoro con serranda sul retro (da lì entrano ed escono le auto dei clienti)
+    const yellow = std(0xf0b43c, { roughness: 0.6 });
+    const shutter = std(0x9aa3ab, { metalness: 0.7, roughness: 0.35 });
+    I.bays = [];
+    I.shutters = [];
+    for (const bx of [-6, 6]) {
+      for (const sx of [-1.6, 1.6]) I.box(0.1, 0.01, 6.4, yellow, bx + sx, 0.015, -3.2);
+      I.box(3.3, 0.01, 0.1, yellow, bx, 0.015, -6.4);
+      const sh = I.box(4.6, 4.2, 0.1, shutter, bx, 2.1, -d / 2 + 0.1);
+      I.box(4.8, 0.3, 0.2, std(0x2b2e33), bx, 4.35, -d / 2 + 0.12);
+      for (let i = 0; i < 12; i++) I.box(4.6, 0.02, 0.12, std(0x7b838b, { metalness: 0.6 }), bx, 0.2 + i * 0.34, -d / 2 + 0.16);
+      I.shutters.push(sh);
+      I.bays.push({ x: I.toWorld(bx, 0, 0).x, z: I.toWorld(0, 0, -3.2).z, local: { x: bx, z: -3.2 }, heading: 0 });
+    }
+    // Ponte sollevatore accanto alla baia destra, colonnine
+    const liftMat = std(0xd9a62b, { metalness: 0.5, roughness: 0.4 });
+    for (const sz of [-5.8, -0.6]) I.box(0.35, 2.8, 0.35, liftMat, 6 + 2.15, 1.4, sz, { solid: true, shadow: true });
+    // Banco attrezzi con pannello portautensili
+    const red = std(0x8a2b2b, { metalness: 0.4, roughness: 0.5 });
+    I.box(0.8, 0.95, 5, red, -w / 2 + 0.6, 0.475, -1, { solid: true, shadow: true });
+    I.box(0.06, 1.8, 5, std(0x3a3d40, { metalness: 0.5 }), -w / 2 + 0.05, 2.0, -1);
+    const steel = std(0xbfc4c9, { metalness: 0.9, roughness: 0.2 });
+    for (let i = 0; i < 10; i++) I.box(0.04, 0.32, 0.05, steel, -w / 2 + 0.12, 1.9 + (i % 2) * 0.4, -3.2 + i * 0.48);
+    // Cassettiera rossa su ruote, fusti d'olio, pile di pneumatici
+    I.box(1.2, 1.1, 0.6, red, 0, 0.55, -8.6, { solid: true, shadow: true });
+    for (let i = 0; i < 5; i++) I.box(1.15, 0.02, 0.02, steel, 0, 0.25 + i * 0.2, -8.29);
+    const drum = std(0x1f4f8a, { metalness: 0.5, roughness: 0.4 });
+    for (const [x, z] of [[w / 2 - 0.8, -8.8], [w / 2 - 1.7, -8.8], [w / 2 - 0.8, -7.9]]) {
+      I.mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.9, 18), drum, x, 0.45, z).castShadow = true;
+      I.addBody(0.6, 0.9, 0.6, x, 0.45, z);
+    }
+    const tire = std(0x151515, { roughness: 0.9 });
+    for (let s = 0; s < 3; s++) for (let i = 0; i < 4; i++) {
+      I.mesh(new THREE.TorusGeometry(0.32, 0.13, 10, 20), tire, -w / 2 + 0.9 + s * 0.9, 0.13 + i * 0.26, -8.7).rotation.x = Math.PI / 2;
+    }
+    I.addBody(2.8, 1.1, 0.9, -w / 2 + 1.8, 0.55, -8.7);
+    // Accettazione con computer dell'officina
+    const desk = std(0x5a3e2b, { roughness: 0.55 });
+    I.box(3.2, 1.0, 0.8, desk, 8.6, 0.5, 6.2, { solid: true, shadow: true });
+    I.box(0.6, 0.38, 0.04, std(0x111214, { metalness: 0.4, roughness: 0.3 }), 8.6, 1.3, 6.0);
+    const scr = new THREE.MeshStandardMaterial({ color: 0x0a1a2a, emissive: 0x3fa9ff, emissiveIntensity: 0.9 });
+    I.box(0.54, 0.32, 0.01, scr, 8.6, 1.3, 6.03);
+    I.box(0.45, 0.02, 0.16, std(0x2a2a2a), 8.6, 1.01, 6.35);
+    I.interact(8.6, 7.3, 'usare il computer dell\'officina', 'workpc', {}, 1.5);
+    // Capofficina (assunzioni e turni) e meccanico (riparazioni a pagamento)
+    I.box(2.4, 0.78, 1.0, desk, -8.6, 0.39, 6.2, { solid: true });
+    I.npc({ skin: I.randomSkin(), shirt: 0xe9e2d0, pants: 0x2b2e33, sleeves: 'long', sex: 'm', hair: 0x9a9a9a, glasses: true }, -8.6, 5.3, 0);
+    I.interact(-8.6, 7.3, 'parlare con il capofficina (lavoro)', 'workjob', {}, 1.5);
+    I.npc({ skin: I.randomSkin(), shirt: 0x2b4f7e, pants: 0x2b4f7e, sleeves: 'long', sex: 'm', uniform: 'mechanic', hair: 0x1b1410 }, -3.2, 3.2, 0.3);
+    I.interact(-3.2, 4.4, 'parlare con il meccanico (riparazioni)', 'mechanic', {}, 1.5);
+    I.calendar(w / 2 - 0.03, 1.7, 2.5, -Math.PI / 2);
+    I.interact(w / 2 - 1.1, 2.5, 'guardare il calendario', 'calendar', {}, 1.2);
+    // Punti di riferimento per i clienti
+    I.counterSpot = I.toWorld(6.6, 0, 6.8);
+    I.backSpot = I.toWorld(0, 0, -8);
     return { w, d, h };
   },
 
@@ -801,7 +909,9 @@ const BUILDERS = {
     const juke = I.box(0.02, 0.9, 0.5, new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffb347, emissiveIntensity: 1.2 }), -w / 2 + 1.11, 1.1, 4.2);
     I.animators.push((t) => { juke.material.emissive.setHSL((t * 0.1) % 1, 0.9, 0.55); });
     I.npc({ skin: I.randomSkin(), shirt: 0x111111, pants: 0x1a1a1a, hair: 0x1b1410, sex: rng() < 0.5 ? 'm' : 'f' }, -1.5, -3.7, 0);
-    I.interact(1.6, -1.8, 'ordinare al bancone', 'shop', { shop: 'bar' }, 1.6);
+    I.interact(1.6, -1.8, 'ordinare da bere al bancone', 'bar', {}, 1.6);
+    I.calendar(w / 2 - 0.03, 1.6, 3.6, -Math.PI / 2);
+    I.interact(w / 2 - 1.0, 3.6, 'guardare il calendario', 'calendar', {}, 1.3);
     I.npc({ skin: I.randomSkin(), shirt: 0x5a2d82, pants: 0x22262e, hair: 0x2a2018, sex: 'f' }, -2.6, -1.6, Math.PI);
     I.npc({ skin: I.randomSkin(), shirt: 0x2d6a4f, pants: 0x22262e, hair: 0x1b1410, sex: 'm' }, 2.2, 1.4, 0.4);
     return { w, d, h };
@@ -936,63 +1046,110 @@ const BUILDERS = {
     return { w, d, h };
   },
 
-  /* ---------------- CHIESA ---------------- */
-  church(I) {
+  /* ---------------- CHIESA / CATTEDRALE / CHIESA DI QUARTIERE ---------------- */
+  church(I, ctx = {}) {
     const rng = I.rng;
-    const w = 16, d = 24, h = 9;
+    const variant = ctx.variant || 'church';
+    const dims = { church: [16, 24, 9], cathedral: [22, 34, 14], chapel: [12, 18, 7] }[variant];
+    const [w, d, h] = dims;
     const floorTex = TEX.marble(rng, 4, 6);
-    const stoneTex = TEX.concrete(0xd9cfbd, rng, 4, 2, 2);
-    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, roughness: 0.2 }), wallMat: std(0xffffff, { map: stoneTex, bumpMap: stoneTex, bumpScale: 0.8, roughness: 0.9 }), ceilMat: std(0x3a2e26, { roughness: 1 }), trim: 0x6b5232 });
+    const stoneTex = TEX.concrete(variant === 'cathedral' ? 0xe6dccb : 0xd9cfbd, rng, 4, 2, 2);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, roughness: 0.2 }), wallMat: std(0xffffff, { map: stoneTex, bumpMap: stoneTex, bumpScale: 0.8, roughness: 0.9 }), ceilMat: std(variant === 'cathedral' ? 0x2a3a5a : 0x3a2e26, { roughness: 1 }), trim: 0x6b5232 });
     I.ambient(0xfff0d8, 0x5a4a3a, 0.35);
-    for (const z of [-8, -1, 6]) I.light(0, h - 1.5, z, 0xffdcae, 26, { fixture: 'pendant', shadow: z === -8 });
+    const lightsZ = [];
+    for (let z = -d / 2 + 4; z < d / 2 - 2; z += 7) lightsZ.push(z);
+    lightsZ.forEach((z, i) => I.light(0, h - 1.5, z, 0xffdcae, variant === 'cathedral' ? 40 : 26, { fixture: 'pendant', shadow: i === 0 }));
     // Vetrate colorate
     const stainColors = [0x3a5bd9, 0xd93a5b, 0xd9b23a, 0x3ad98f, 0x9b3ad9];
+    const nWin = Math.max(2, Math.floor((d - 8) / 5));
     for (const side of [-1, 1]) {
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < nWin; i++) {
         const c = stainColors[(i + (side > 0 ? 2 : 0)) % stainColors.length];
-        const win = I.mesh(new THREE.PlaneGeometry(1.4, 3.6), new THREE.MeshBasicMaterial({ color: c, toneMapped: false }), side * (w / 2 - 0.02), 4.8, -8 + i * 5);
+        const win = I.mesh(new THREE.PlaneGeometry(1.4, Math.min(3.6, h * 0.42)), new THREE.MeshBasicMaterial({ color: c, toneMapped: false }), side * (w / 2 - 0.02), h * 0.55, -d / 2 + 6 + i * 5);
         win.rotation.y = -side * Math.PI / 2;
       }
     }
+    if (variant === 'cathedral') {
+      // Colonnato della navata centrale
+      const colMat = std(0xffffff, { map: TEX.marble(rng, 1, 3), roughness: 0.25 });
+      for (let z = -d / 2 + 7; z < d / 2 - 4; z += 5) {
+        for (const sx of [-1, 1]) {
+          I.mesh(new THREE.CylinderGeometry(0.45, 0.55, h, 18), colMat, sx * (w / 2 - 4.5), h / 2, z).castShadow = true;
+          I.addBody(1, h, 1, sx * (w / 2 - 4.5), h / 2, z);
+        }
+      }
+      const rose = I.mesh(new THREE.CircleGeometry(2.4, 32), new THREE.MeshBasicMaterial({ color: 0x6a5acd, toneMapped: false }), 0, h - 3.5, -d / 2 + 0.03);
+      rose.castShadow = false;
+    }
     // Panche
     const pewMat = std(0x5a3a24, { roughness: 0.55 });
-    for (let r = 0; r < 6; r++) {
+    const pewW = variant === 'chapel' ? 3.6 : 4.6;
+    const pewX = variant === 'chapel' ? 2.6 : 3.6;
+    for (let z = -d / 2 + 8; z < d / 2 - 5; z += 2) {
       for (const sx of [-1, 1]) {
-        const x = sx * 3.6, z = -4 + r * 2;
-        I.box(4.6, 0.08, 0.5, pewMat, x, 0.46, z);
-        I.box(4.6, 0.6, 0.08, pewMat, x, 0.8, z + 0.25);
-        I.box(0.08, 0.46, 0.5, pewMat, x - 2.25, 0.23, z);
-        I.box(0.08, 0.46, 0.5, pewMat, x + 2.25, 0.23, z);
-        I.addBody(4.6, 1.1, 0.6, x, 0.55, z + 0.05);
+        const x = sx * pewX;
+        I.box(pewW, 0.08, 0.5, pewMat, x, 0.46, z);
+        I.box(pewW, 0.6, 0.08, pewMat, x, 0.8, z + 0.25);
+        I.box(0.08, 0.46, 0.5, pewMat, x - pewW / 2 + 0.05, 0.23, z);
+        I.box(0.08, 0.46, 0.5, pewMat, x + pewW / 2 - 0.05, 0.23, z);
+        I.addBody(pewW, 1.1, 0.6, x, 0.55, z + 0.05);
       }
     }
     // Presbiterio, altare e croce
-    I.box(10, 0.4, 4, std(0xe8e0d0, { roughness: 0.3 }), 0, 0.2, -d / 2 + 2.2, { solid: true });
+    I.box(Math.min(10, w - 2), 0.4, 4, std(0xe8e0d0, { roughness: 0.3 }), 0, 0.2, -d / 2 + 2.2, { solid: true });
     I.box(2.6, 1.0, 1.0, std(0xf4efe4, { roughness: 0.3 }), 0, 0.9, -d / 2 + 2.4, { solid: true, shadow: true });
     I.box(2.8, 0.05, 1.1, std(0xffffff, { roughness: 0.9 }), 0, 1.42, -d / 2 + 2.4);
     const gold = std(0xd6a73a, { metalness: 0.95, roughness: 0.25 });
-    I.box(0.25, 3.2, 0.2, gold, 0, 5.2, -d / 2 + 0.2);
-    I.box(1.7, 0.25, 0.2, gold, 0, 6.0, -d / 2 + 0.2);
+    I.box(0.25, 3.2, 0.2, gold, 0, Math.min(5.2, h - 2), -d / 2 + 0.2);
+    I.box(1.7, 0.25, 0.2, gold, 0, Math.min(6.0, h - 1.2), -d / 2 + 0.2);
     // Candelabro votivo con candele tremolanti
     const flames = [];
-    I.box(1.4, 0.9, 0.5, std(0x3a2e26), 4.5, 0.45, -d / 2 + 4.2, { solid: true });
+    const cxv = Math.min(4.5, w / 2 - 1.6);
+    I.box(1.4, 0.9, 0.5, std(0x3a2e26), cxv, 0.45, -d / 2 + 4.2, { solid: true });
     const flameMat = new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffa040, emissiveIntensity: 2.2 });
     for (let i = 0; i < 9; i++) {
-      const cx = 3.95 + (i % 5) * 0.27, cz = -d / 2 + 4.05 + Math.floor(i / 5) * 0.25;
+      const cx = cxv - 0.55 + (i % 5) * 0.27, cz = -d / 2 + 4.05 + Math.floor(i / 5) * 0.25;
       I.mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.14, 8), std(0xf8f4e8), cx, 0.97, cz);
       flames.push(I.mesh(new THREE.ConeGeometry(0.018, 0.05, 6), flameMat, cx, 1.07, cz));
     }
     const candleLight = new THREE.PointLight(0xffa040, 3, 6, 2);
-    candleLight.position.set(4.5, 1.3, -d / 2 + 4.2);
+    candleLight.position.set(cxv, 1.3, -d / 2 + 4.2);
     I.group.add(candleLight);
     I.animators.push((t) => {
       candleLight.intensity = 2.6 + Math.sin(t * 13) * 0.4 + Math.sin(t * 7.3) * 0.3;
       flames.forEach((f, i) => { f.scale.y = 1 + Math.sin(t * 15 + i) * 0.2; });
     });
+    // Confessionale in legno con grata
+    const conf = std(0x4a3020, { roughness: 0.6 });
+    const cfx = -(w / 2 - 1.0), cfz = 0;
+    I.box(1.6, 2.4, 1.1, conf, cfx, 1.2, cfz, { solid: true, shadow: true });
+    I.box(1.7, 0.15, 1.2, conf, cfx, 2.47, cfz);
+    I.box(0.02, 0.5, 0.4, std(0x1a1008), cfx + 0.81, 1.5, cfz);
+    I.box(0.05, 1.8, 0.7, std(0x6b1f2a, { roughness: 1 }), cfx + 0.82, 1.0, cfz + 0.25);
+    // Sacerdote
     I.npc({ shirt: 0x111111, pants: 0x111111, sleeves: 'long', sex: 'm', hair: 0x9a9a9a }, -1.6, -d / 2 + 3.4, 0.3);
+    I.sign(variant === 'cathedral' ? 'CATTEDRALE DI SANTA MARIA' : variant === 'chapel' ? 'CHIESA DI SAN FRANCESCO' : 'CHIESA DI SAN MICHELE', '#ffd98a', 4.4, 0.5, 0, h - 0.6, d / 2 - 0.02, Math.PI, 'rgba(30,22,12,0.95)');
+    I.calendar(w / 2 - 0.03, 1.7, d / 2 - 2.2, -Math.PI / 2);
     I.interact(0, -d / 2 + 4.6, 'pregare davanti all\'altare', 'pray', {}, 2.0);
-    I.interact(4.5, -d / 2 + 5.2, 'accendere una candela (offerta $2)', 'candle', {}, 1.5);
+    I.interact(0, -d / 2 + 6.4, 'contemplare la luce (Paradiso)', 'paradise', {}, 1.3);
+    I.interact(cxv, -d / 2 + 5.2, 'accendere una candela (offerta € 2)', 'candle', {}, 1.5);
+    I.interact(0, -d / 2 + 9.5, 'partecipare alla Santa Messa', 'mass', {}, 1.6);
+    I.interact(cfx + 1.6, cfz, 'confessarti', 'confess', {}, 1.5);
+    I.interact(w / 2 - 1.1, d / 2 - 2.2, 'guardare il calendario liturgico', 'calendar', {}, 1.4);
     return { w, d, h };
+  },
+
+  cathedral(I, ctx) {
+    return BUILDERS.church(I, { ...ctx, variant: 'cathedral' });
+  },
+
+  chapel(I, ctx) {
+    return BUILDERS.church(I, { ...ctx, variant: 'chapel' });
+  },
+
+  /** Casa acquistabile nei quartieri: interno di casa (villetta = ricca, casa = ceto medio). */
+  house(I, ctx) {
+    return BUILDERS.home(I, { ...ctx, familyId: ctx.houseTier || 'middle' });
   },
 
   /* ---------------- STAZIONE DI POLIZIA ---------------- */
@@ -1106,5 +1263,7 @@ function buildDiner(I, ctx, kind) {
   });
   I.plant(-w / 2 + 0.7, d / 2 - 0.8, 1.2);
   I.plant(w / 2 - 0.7, d / 2 - 0.8, 1.2);
+  I.calendar(-w / 2 + 0.03, 1.7, 4.2, Math.PI / 2);
+  I.interact(-w / 2 + 1.0, 4.2, 'guardare il calendario', 'calendar', {}, 1.2);
   return { w, d, h };
 }

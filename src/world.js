@@ -9,7 +9,38 @@ export const ROAD = 14;
 export const GRID = 7;
 export const CELL = BLOCK + ROAD;
 export const HALF = (GRID * CELL) / 2;
+/** Anelli di quartieri residenziali attorno al centro città. */
+export const RINGS = 4;
+export const URBAN_HALF = HALF + RINGS * CELL; // fine dei quartieri (strade comprese)
+export const PLAY_EDGE = 690; // confine giocabile (campagna e colline comprese): area ~10x la città iniziale
+export const WORLD_EXT = PLAY_EDGE + 20; // estensione usata da minimappa e mappa grande
+const TERRAIN_ES = 10; // passo della griglia del terreno (fisica e grafica coincidono)
+const LAKE = { x: -560, z: 120, r: 75 };
 const SIDEWALK_H = 0.2;
+
+/** Rumore deterministico a somma di sinusoidi (0..1). */
+function terrainNoise(x, z) {
+  return 0.5 + 0.25 * Math.sin(x * 0.011 + 1.3) * Math.cos(z * 0.013 - 0.7)
+    + 0.15 * Math.sin(x * 0.027 + z * 0.019 + 2.1)
+    + 0.1 * Math.cos(x * 0.051 - z * 0.043 + 0.4);
+}
+
+/**
+ * Altezza del terreno: piatto in città e nei quartieri, colline dolci in campagna, montagne oltre il confine.
+ */
+export function terrainHeight(x, z) {
+  const d = Math.max(Math.abs(x), Math.abs(z)) - (URBAN_HALF + 12);
+  if (d <= 0) return 0;
+  const k = THREE.MathUtils.smoothstep(d, 0, 140);
+  let h = k * (4 + 22 * terrainNoise(x, z));
+  // Lago con conca
+  const ld = Math.hypot(x - LAKE.x, z - LAKE.z);
+  if (ld < LAKE.r + 40) h = THREE.MathUtils.lerp(-1.2, h, THREE.MathUtils.smoothstep(ld, LAKE.r - 25, LAKE.r + 40));
+  // Montagne oltre l'area giocabile
+  const r = Math.max(Math.abs(x), Math.abs(z));
+  if (r > PLAY_EDGE - 20) h += THREE.MathUtils.smoothstep(r, PLAY_EDGE - 20, PLAY_EDGE + 500) * (90 + 220 * terrainNoise(x * 0.6 + 300, z * 0.6 - 200));
+  return h;
+}
 const TILE_W = 16; // metri coperti da una ripetizione della texture di facciata
 const TILE_H = 14;
 
@@ -18,6 +49,9 @@ export const DISTRICTS = {
   middle: { id: 'middle', name: 'Centro', style: 'concrete', minH: 14, maxH: 36, lots: [2, 2], sidewalk: 0xaaa59b, trees: true },
   worker: { id: 'worker', name: 'Zona Industriale', style: 'industrial', minH: 7, maxH: 14, lots: [2, 2], sidewalk: 0x8f8b83, trees: false },
   poor: { id: 'poor', name: 'Periferia', style: 'brick', minH: 9, maxH: 22, lots: [2, 3], sidewalk: 0x7f7b73, trees: false },
+  suburb: { id: 'suburb', name: 'Quartiere residenziale', style: 'house', minH: 6, maxH: 8, lots: [2, 2], sidewalk: 0xb8b3a8, trees: true },
+  villas: { id: 'villas', name: 'Zona villette', style: 'house', minH: 6, maxH: 8, lots: [2, 2], sidewalk: 0xc2bdb2, trees: true },
+  country: { id: 'country', name: 'Campagna e colline', style: 'none', minH: 0, maxH: 0, lots: [0, 0], sidewalk: 0x8f8b83, trees: false },
 };
 
 const SPAWN_ROW = { rich: 1, middle: 3, worker: 4, poor: 5 };
@@ -38,15 +72,21 @@ export const BUILDING_TYPES = {
   pizzeria: { name: 'Pizzeria Vesuvio', sign: 'PIZZERIA', signColor: '#ff6a4d', signBg: 'rgba(16,40,20,0.95)', w: 16, d: 13, h: 8, style: 'brick' },
   church: { name: 'Chiesa di San Michele', sign: null, w: 18, d: 26, h: 14, style: 'concrete' },
   police: { name: 'Stazione di Polizia', sign: 'POLIZIA', signColor: '#8fc0ff', signBg: 'rgba(10,20,50,0.95)', w: 22, d: 14, h: 12, style: 'concrete' },
+  cathedral: { name: 'Cattedrale di Santa Maria', sign: null, w: 26, d: 36, h: 22, style: 'concrete' },
+  chapel: { name: 'Chiesa di San Francesco', sign: null, w: 16, d: 22, h: 12, style: 'concrete' },
+  house: { name: 'Casa in vendita', sign: null, w: 12, d: 10, h: 7 },
+  workshop: { name: 'Officina Meccanica', sign: 'OFFICINA', signColor: '#ffb347', signBg: 'rgba(28,18,6,0.95)', w: 26, d: 18, h: 8, style: 'industrial' },
 };
 
 /** Icone/colori per minimappa e mappa grande. */
 export const MAP_ICONS = {
   home: { color: '#f0b43c', letter: 'C' }, hospital: { color: '#ff5a5a', letter: 'H' }, market: { color: '#7dff9a', letter: 'M' },
-  bank: { color: '#f0c860', letter: '€' }, bar: { color: '#ff6fae', letter: 'B' }, garage: { color: '#8fd0ff', letter: 'V' },
+  bank: { color: '#f0c860', letter: 'B' }, bar: { color: '#ff6fae', letter: 'L' }, garage: { color: '#8fd0ff', letter: 'V' },
   weapons: { color: '#ff9a4a', letter: 'A' }, clothing: { color: '#d9b8ff', letter: 'S' }, pharmacy: { color: '#5dff8a', letter: '+' },
   restaurant: { color: '#ffd27a', letter: 'R' }, pizzeria: { color: '#ff6a4d', letter: 'P' }, church: { color: '#ffffff', letter: '†' },
-  police: { color: '#8fc0ff', letter: 'Π' }, atm: { color: '#7fd0ff', letter: '$' },
+  police: { color: '#8fc0ff', letter: 'Π' }, atm: { color: '#7fd0ff', letter: '€' },
+  cathedral: { color: '#fff3c4', letter: '✝' }, chapel: { color: '#ffffff', letter: '†' }, house: { color: '#9be37a', letter: '⌂' },
+  workshop: { color: '#ffb347', letter: 'O' },
 };
 
 function signTexture(text, color, bg) {
@@ -248,6 +288,10 @@ export class CityWorld {
     };
 
     this.staticMaterial = new CANNON.Material('static');
+    this.seed = seed >>> 0;
+    this.houses = [];
+    // Chiese aggiuntive nei quartieri (chiave: riga,colonna nella griglia estesa)
+    this.suburbFeatures = { '-2,3': 'cathedral', '8,1': 'chapel', '3,9': 'chapel', '-1,1': 'workshop' };
 
     this.buildMaterials();
     this.buildGround();
@@ -255,6 +299,10 @@ export class CityWorld {
     this.buildRoadMarkings();
     this.buildStreetProps();
     this.buildAtms();
+    // Espansione: quartieri residenziali, campagna collinare, lago e montagne (generatore separato:
+    // il centro città resta identico a prima, quindi i salvataggi esistenti restano validi)
+    this.buildSuburbs();
+    this.buildTerrain();
     this.buildBounds();
     this.buildSky();
     const lm = buildLandmark(city.id, HALF);
@@ -294,7 +342,7 @@ export class CityWorld {
       this.root.add(g);
       this.addStaticBox(s.x, SIDEWALK_H + 0.85, s.z, 0.45, 0.85, 0.3);
       const front = { x: s.x, z: s.z + (s.nz > 0 ? 0.9 : -0.9) };
-      this.atms.push({ x: front.x, z: front.z, mx: s.x, mz: s.z });
+      this.atms.push({ x: front.x, z: front.z, mx: s.x, mz: s.z, group: g, screen, robbedDay: -1 });
     }
     this.windowMaterials.push(topMat);
   }
@@ -346,7 +394,8 @@ export class CityWorld {
 
   /* ---------- Terreno ---------- */
   buildGround() {
-    const size = HALF * 2 + 600;
+    // Asfalto su città e quartieri; il resto è terreno (vedi buildTerrain)
+    const size = URBAN_HALF * 2 + 20;
     const asphalt = noiseTexture(0x3b3d41, 26, 256, size / 12, this.rng);
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(size, size),
@@ -356,12 +405,128 @@ export class CityWorld {
     ground.receiveShadow = true;
     this.root.add(ground);
     this.groundMesh = ground;
+    // Pavimento fisico della zona degli interni (lontana dalla mappa)
+    this.addStaticBox(4000, -0.5, 4000, 150, 0.5, 150);
+  }
 
+  /** Terreno giocabile (heightfield Cannon-es + mesh identica), lago e montagne all'orizzonte. */
+  buildTerrain() {
+    const es = TERRAIN_ES;
+    const n = Math.round((PLAY_EDGE + 10) * 2 / es) + 1;
+    const x0 = -(n - 1) * es / 2;
+    const z0 = (n - 1) * es / 2;
+    const matrix = [];
+    for (let i = 0; i < n; i++) {
+      const col = [];
+      for (let j = 0; j < n; j++) col.push(terrainHeight(x0 + i * es, z0 - j * es));
+      matrix.push(col);
+    }
+    const hf = new CANNON.Heightfield(matrix, { elementSize: es });
     const body = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, material: this.staticMaterial });
-    body.addShape(new CANNON.Plane());
+    body.addShape(hf);
+    body.position.set(x0, 0, z0);
     body.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
     this.physics.addBody(body);
     this.bodies.push(body);
+
+    // Mesh del terreno con gli stessi vertici della fisica (sotto l'asfalto in città)
+    const size = (n - 1) * es;
+    const geo = new THREE.PlaneGeometry(size, size, n - 1, n - 1);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    const c = new THREE.Color();
+    for (let v = 0; v < pos.count; v++) {
+      const x = pos.getX(v), z = pos.getZ(v);
+      const h = terrainHeight(x, z);
+      const urban = Math.max(Math.abs(x), Math.abs(z)) < URBAN_HALF + 10;
+      pos.setY(v, urban ? -0.06 : h);
+      const lake = Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 4;
+      if (lake) c.setRGB(0.55, 0.5, 0.38);
+      else c.setHSL(0.27 + terrainNoise(x * 3, z * 3) * 0.05, 0.42, 0.26 + Math.min(0.12, h * 0.004) + terrainNoise(x * 7, z * 7) * 0.05);
+      colors[v * 3] = c.r; colors[v * 3 + 1] = c.g; colors[v * 3 + 2] = c.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    const grassTex = noiseTexture(0xffffff, 40, 128, size / 8, this.rng);
+    const terrain = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, map: grassTex, roughness: 1 }));
+    terrain.receiveShadow = true;
+    this.root.add(terrain);
+
+    // Lago
+    const water = new THREE.Mesh(new THREE.CircleGeometry(LAKE.r + 2, 48), new THREE.MeshStandardMaterial({ color: 0x2f6f8f, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.88 }));
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(LAKE.x, -0.45, LAKE.z);
+    this.root.add(water);
+    this.mapData.lake = { ...LAKE };
+
+    // Montagne (solo grafica, oltre il confine)
+    const mSize = 3600, mSeg = 90;
+    const mGeo = new THREE.PlaneGeometry(mSize, mSize, mSeg, mSeg);
+    mGeo.rotateX(-Math.PI / 2);
+    const mp = mGeo.attributes.position;
+    const mCol = new Float32Array(mp.count * 3);
+    for (let v = 0; v < mp.count; v++) {
+      const x = mp.getX(v), z = mp.getZ(v);
+      const r = Math.max(Math.abs(x), Math.abs(z));
+      const h = r < PLAY_EDGE + 15 ? -2 : terrainHeight(x, z);
+      mp.setY(v, h);
+      if (h > 230) c.setRGB(0.95, 0.96, 0.98);
+      else if (h > 140) c.setRGB(0.48, 0.46, 0.44);
+      else c.setHSL(0.28, 0.35, 0.22 + h * 0.0006);
+      mCol[v * 3] = c.r; mCol[v * 3 + 1] = c.g; mCol[v * 3 + 2] = c.b;
+    }
+    mGeo.setAttribute('color', new THREE.BufferAttribute(mCol, 3));
+    mGeo.computeVertexNormals();
+    const mountains = new THREE.Mesh(mGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true }));
+    mountains.position.y = -0.1;
+    this.root.add(mountains);
+
+    // Alberi di campagna (latifoglie e pini) con collider
+    const rng = seededRandom((this.seed ^ 0x7a3c11) >>> 0);
+    const spots = [];
+    let guard = 0;
+    while (spots.length < 320 && guard++ < 6000) {
+      const x = (rng() * 2 - 1) * (PLAY_EDGE - 15);
+      const z = (rng() * 2 - 1) * (PLAY_EDGE - 15);
+      if (Math.max(Math.abs(x), Math.abs(z)) < URBAN_HALF + 25) continue;
+      if (Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 8) continue;
+      spots.push([x, z, rng() < 0.5]);
+    }
+    const trunkGeo = new THREE.CylinderGeometry(0.22, 0.32, 4, 6);
+    trunkGeo.translate(0, 2, 0);
+    const leafGeo = new THREE.IcosahedronGeometry(2.4, 1);
+    leafGeo.translate(0, 5.2, 0);
+    const pineGeo = new THREE.ConeGeometry(2.2, 7, 8);
+    pineGeo.translate(0, 6.5, 0);
+    const leafy = spots.filter((s) => !s[2]), pines = spots.filter((s) => s[2]);
+    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x5a3f2c, roughness: 1 }), spots.length);
+    const leaves = new THREE.InstancedMesh(leafGeo, new THREE.MeshStandardMaterial({ color: 0x4f7d3a, roughness: 1, flatShading: true }), Math.max(1, leafy.length));
+    const pineM = new THREE.InstancedMesh(pineGeo, new THREE.MeshStandardMaterial({ color: 0x2f5a35, roughness: 1, flatShading: true }), Math.max(1, pines.length));
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const p = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    let li = 0, pi = 0;
+    spots.forEach(([x, z, pine], i) => {
+      const y = terrainHeight(x, z);
+      const s = 0.8 + rng() * 0.6;
+      p.set(x, y - 0.2, z);
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rng() * Math.PI * 2);
+      sc.set(s, s, s);
+      m4.compose(p, q, sc);
+      trunks.setMatrixAt(i, m4);
+      if (pine) pineM.setMatrixAt(pi++, m4); else leaves.setMatrixAt(li++, m4);
+      this.addStaticBox(x, y + 2, z, 0.35, 2, 0.35);
+    });
+    leaves.count = li;
+    pineM.count = pi;
+    trunks.castShadow = leaves.castShadow = pineM.castShadow = true;
+    this.root.add(trunks, leaves, pineM);
+  }
+
+  getHeight(x, z) {
+    return terrainHeight(x, z);
   }
 
   buildBlocks() {
@@ -578,6 +743,31 @@ export class CityWorld {
     this.mapData.buildings.push({ x: cx, z: bz, w, d, district: 'church' });
   }
 
+  /** Officina meccanica: capannone con serrande, piazzale e pneumatici impilati. */
+  buildWorkshop(cx, bz, def) {
+    const { w, d, h } = def;
+    this.addBuilding(cx, bz, w, d, h, 'industrial', 'worker');
+    const shutterMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ab, metalness: 0.7, roughness: 0.35 });
+    const stripeMat = new THREE.MeshStandardMaterial({ color: 0xf0b43c, roughness: 0.5 });
+    for (const sx of [-1, 1]) {
+      const shutter = new THREE.Mesh(new THREE.BoxGeometry(6.5, 4.6, 0.12), shutterMat);
+      shutter.position.set(cx + sx * 7.5, SIDEWALK_H + 2.3, bz + d / 2 + 0.06);
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(6.6, 0.25, 0.14), stripeMat);
+      stripe.position.set(cx + sx * 7.5, SIDEWALK_H + 4.75, bz + d / 2 + 0.07);
+      this.root.add(shutter, stripe);
+    }
+    // Pneumatici impilati sul piazzale (con collider)
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x151515, roughness: 0.9 });
+    for (let i = 0; i < 4; i++) {
+      const t = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.14, 10, 20), tireMat);
+      t.rotation.x = Math.PI / 2;
+      t.position.set(cx + w / 2 - 1, SIDEWALK_H + 0.14 + i * 0.28, bz + d / 2 + 1.6);
+      t.castShadow = true;
+      this.root.add(t);
+    }
+    this.addStaticBox(cx + w / 2 - 1, SIDEWALK_H + 0.6, bz + d / 2 + 1.6, 0.5, 0.6, 0.5);
+  }
+
   /** Porta accessibile: battente, telaio, pensilina, lampada, insegna e anello luminoso a terra. */
   addDoor(type, x, faceZ, def, doorW = 1.8, nz = 1) {
     const g = new THREE.Group();
@@ -664,10 +854,11 @@ export class CityWorld {
     const dashLen = 3, gap = 3;
     const positions = [];
     const lines = [];
-    for (let i = 0; i <= GRID; i++) lines.push(-HALF + i * CELL);
+    // Strade di città + quartieri residenziali
+    for (let i = -RINGS; i <= GRID + RINGS; i++) lines.push(-HALF + i * CELL);
     const nearIntersection = (v) => lines.some((l) => Math.abs(v - l) < ROAD / 2 + 4.5);
     for (const l of lines) {
-      for (let s = -HALF; s <= HALF; s += dashLen + gap) {
+      for (let s = -URBAN_HALF; s <= URBAN_HALF; s += dashLen + gap) {
         const mid = s + dashLen / 2;
         if (nearIntersection(mid)) continue;
         positions.push([l, mid, 0]); // linea lungo Z
@@ -869,22 +1060,210 @@ export class CityWorld {
   }
 
   buildBounds() {
-    const edge = HALF + ROAD / 2 + 2;
+    // Confine invisibile dell'area giocabile (dove iniziano le montagne)
+    const edge = PLAY_EDGE;
     const len = edge * 2 + 10;
-    this.addStaticBox(0, 10, -edge, len / 2, 10, 1);
-    this.addStaticBox(0, 10, edge, len / 2, 10, 1);
-    this.addStaticBox(-edge, 10, 0, 1, 10, len / 2);
-    this.addStaticBox(edge, 10, 0, 1, 10, len / 2);
-    // Fila di edifici bassi sul perimetro per chiudere visivamente la città
-    const rng = this.rng;
-    for (let s = -edge; s < edge; s += 14) {
-      for (const [x, z] of [[s + 7, -edge - 9], [s + 7, edge + 9], [-edge - 9, s + 7], [edge + 9, s + 7]]) {
-        const h = 10 + rng() * 26;
-        const mesh = new THREE.Mesh(buildingGeometry(13, h, 13), this.pickMaterialArray(rng() < 0.5 ? 'concrete' : 'brick'));
-        mesh.position.set(x, h / 2, z);
-        this.root.add(mesh);
+    this.addStaticBox(0, 100, -edge, len / 2, 200, 1);
+    this.addStaticBox(0, 100, edge, len / 2, 200, 1);
+    this.addStaticBox(-edge, 100, 0, 1, 200, len / 2);
+    this.addStaticBox(edge, 100, 0, 1, 200, len / 2);
+  }
+
+  /* ---------- Quartieri residenziali: case, villette, chiese ---------- */
+  houseTexture() {
+    const c = makeCanvas(256, 256);
+    const g = c.getContext('2d');
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(0,0,0,${Math.random() * 0.05})`; g.fillRect(Math.random() * 256, Math.random() * 256, 3, 3); }
+    // Due piani, due finestre per piano con persiane
+    for (const y of [40, 150]) {
+      for (const x of [40, 156]) {
+        g.fillStyle = '#5b4a3a'; g.fillRect(x - 14, y, 12, 62); g.fillRect(x + 62, y, 12, 62);
+        g.fillStyle = '#f4f1ea'; g.fillRect(x - 4, y - 4, 68, 70);
+        g.fillStyle = '#2d3a46'; g.fillRect(x, y, 60, 62);
+        g.fillStyle = '#e8e4dc'; g.fillRect(x + 28, y, 4, 62); g.fillRect(x, y + 29, 60, 4);
       }
     }
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    g.fillRect(0, 128, 256, 4);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    const e = makeCanvas(256, 256);
+    const ge = e.getContext('2d');
+    ge.fillStyle = '#000';
+    ge.fillRect(0, 0, 256, 256);
+    ge.fillStyle = '#ffcf86';
+    ge.fillRect(40, 150, 60, 62);
+    ge.fillRect(156, 40, 60, 62);
+    const te = new THREE.CanvasTexture(e);
+    te.colorSpace = THREE.SRGBColorSpace;
+    return { map: t, emissive: te };
+  }
+
+  buildSuburbs() {
+    const rng = seededRandom((this.seed ^ 0x51ed27) >>> 0);
+    const cells = [];
+    for (let gj = -RINGS; gj < GRID + RINGS; gj++) {
+      for (let gi = -RINGS; gi < GRID + RINGS; gi++) {
+        if (gi >= 0 && gi < GRID && gj >= 0 && gj < GRID) continue;
+        cells.push([gj, gi]);
+      }
+    }
+    const tex = this.houseTexture();
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: tex.map, emissive: 0xffffff, emissiveMap: tex.emissive, emissiveIntensity: 0, roughness: 0.85 });
+    this.windowMaterials.push(wallMat);
+    const roofShape = new THREE.Shape();
+    roofShape.moveTo(-0.5, 0); roofShape.lineTo(0, 1); roofShape.lineTo(0.5, 0); roofShape.closePath();
+    const roofGeo = new THREE.ExtrudeGeometry(roofShape, { depth: 1, bevelEnabled: false });
+    roofGeo.translate(0, 0, -0.5);
+    roofGeo.rotateY(Math.PI / 2); // colmo lungo X
+    const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+    boxGeo.translate(0, 0.5, 0);
+    const walls = [], roofs = [], gardens = [], hedges = [], doors = [], walksY = [], lamps = [], trees = [];
+    const wallColors = [0xf2e6d0, 0xe8d3b0, 0xf4f0e6, 0xd9c2a3, 0xefd9c9, 0xcfd8d6, 0xf0e1b8];
+    const roofColors = [0xa5452b, 0x8c3b25, 0x6b4a3a, 0x4a4d52, 0xb0573a];
+    const sidewalkCol = new THREE.Color();
+    let forSale = 0;
+
+    for (const [gj, gi] of cells) {
+      const cx = blockCenter(gi), cz = blockCenter(gj);
+      const ring = Math.max(-gi, gi - (GRID - 1), -gj, gj - (GRID - 1));
+      const villas = ring >= 3;
+      const dist = villas ? DISTRICTS.villas : DISTRICTS.suburb;
+      walksY.push([cx, cz, dist.sidewalk]);
+      this.addStaticBox(cx, SIDEWALK_H / 2, cz, BLOCK / 2, SIDEWALK_H / 2, BLOCK / 2);
+      const feature = this.suburbFeatures[`${gj},${gi}`];
+      const park = !feature && rng() < 0.07;
+      this.mapData.blocks.push({ x: cx, z: cz, size: BLOCK, district: dist.id, park });
+      lamps.push([cx - BLOCK / 2 + 1, cz - BLOCK / 2 + 1], [cx + BLOCK / 2 - 1, cz + BLOCK / 2 - 1]);
+
+      if (feature) {
+        const def = BUILDING_TYPES[feature];
+        const bz = cz + BLOCK / 2 - 4 - def.d / 2;
+        if (feature === 'workshop') this.buildWorkshop(cx, bz, def);
+        else this.buildChurch(cx, bz, def.w, def.d, def.h, 1);
+        this.addDoor(feature, cx, bz + def.d / 2, def, feature === 'workshop' ? 2.2 : 2.6, 1);
+        continue;
+      }
+      if (park) {
+        gardens.push([cx, cz, BLOCK - 6, BLOCK - 6]);
+        for (let k = 0; k < 10; k++) trees.push([cx + (rng() - 0.5) * (BLOCK - 10), cz + (rng() - 0.5) * (BLOCK - 10)]);
+        continue;
+      }
+      // Lotti: due file di case (una guarda a sud, una a nord)
+      const perRow = villas ? 1 : 2;
+      for (const nz of [1, -1]) {
+        for (let k = 0; k < perRow; k++) {
+          const lx = perRow === 1 ? cx : cx + (k === 0 ? -9.5 : 9.5);
+          const w = villas ? 13 + rng() * 3 : 8.5 + rng() * 2.5;
+          const d = villas ? 10.5 + rng() * 2 : 8 + rng() * 2;
+          const h = villas ? 6.6 + rng() * 0.8 : 5.8 + rng() * 1.4;
+          const frontZ = cz + nz * (BLOCK / 2 - (villas ? 7 : 5.5));
+          const hz = frontZ - nz * d / 2;
+          const wallC = wallColors[Math.floor(rng() * wallColors.length)];
+          walls.push([lx, hz, w, h, d, wallC]);
+          roofs.push([lx, hz, w + 0.7, villas ? 2.6 : 2.2, d + 0.7, roofColors[Math.floor(rng() * roofColors.length)], h]);
+          this.addStaticBox(lx, SIDEWALK_H + h / 2, hz, w / 2, h / 2, d / 2);
+          this.mapData.buildings.push({ x: lx, z: hz, w, d, district: 'suburb' });
+          if (villas) {
+            gardens.push([lx, frontZ + nz * 2.2, w + 6, 4.2]);
+            hedges.push([lx - (w / 2 + 2.6), frontZ + nz * 4.1, 0.6, 1.1, 0.7], [lx + (w / 2 + 2.6), frontZ + nz * 4.1, 0.6, 1.1, 0.7]);
+          }
+          const sale = forSale < 16 && rng() < (villas ? 0.22 : 0.1);
+          if (sale) {
+            forSale++;
+            const kind = villas ? 'villetta' : 'casa';
+            const price = villas ? Math.round((180 + rng() * 270) / 5) * 5000 : Math.round((65 + rng() * 60) / 5) * 5000;
+            const id = `h${gj}_${gi}_${nz}_${k}`;
+            const name = villas ? 'Villetta in vendita' : 'Casa in vendita';
+            const door = this.addDoor('house', lx, frontZ + nz * 0.02, { ...BUILDING_TYPES.house, name }, 1.4, nz);
+            door.house = { id, kind, price, tier: villas ? 'rich' : 'middle' };
+            // Cartello VENDESI in giardino
+            const board = new THREE.Group();
+            const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.4, 0.08), new THREE.MeshStandardMaterial({ color: 0x5a3e2b }));
+            post.position.y = 0.7;
+            const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.6), new THREE.MeshBasicMaterial({ map: signTexture('VENDESI', '#ffffff', 'rgba(200,30,40,0.98)'), side: THREE.DoubleSide, toneMapped: false }));
+            panel.position.y = 1.3;
+            board.add(post, panel);
+            board.position.set(lx + w / 2 - 0.5, SIDEWALK_H, frontZ + nz * 2.6);
+            if (nz < 0) board.rotation.y = Math.PI;
+            this.root.add(board);
+            door.saleSign = board;
+            this.houses.push(door);
+          } else {
+            doors.push([lx, frontZ + nz * 0.05, nz]);
+          }
+          trees.push([lx + w / 2 + (villas ? 3.5 : 1.5), cz + nz * (BLOCK / 2 - 1.6)]);
+        }
+      }
+    }
+
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const p = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    const col = new THREE.Color();
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    const inst = (geo, mat, list, fn) => {
+      const im = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
+      list.forEach((it, i) => fn(im, it, i));
+      im.count = list.length;
+      im.instanceMatrix.needsUpdate = true;
+      if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      this.root.add(im);
+      return im;
+    };
+    const sidewalkGeo = new THREE.BoxGeometry(BLOCK, SIDEWALK_H, BLOCK);
+    inst(sidewalkGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, map: noiseTexture(0xffffff, 30, 256, BLOCK / 4, rng, true), roughness: 0.85 }), walksY, (im, [x, z, c], i) => {
+      m4.makeTranslation(x, SIDEWALK_H / 2, z); im.setMatrixAt(i, m4); im.setColorAt(i, sidewalkCol.set(c));
+    }).receiveShadow = true;
+    const wallsMesh = inst(boxGeo, wallMat, walls, (im, [x, z, w, h, d, c], i) => {
+      p.set(x, SIDEWALK_H, z); q.identity(); sc.set(w, h, d); m4.compose(p, q, sc); im.setMatrixAt(i, m4); im.setColorAt(i, col.set(c));
+    });
+    wallsMesh.castShadow = wallsMesh.receiveShadow = true;
+    this.collidables.push(wallsMesh);
+    const roofMesh = inst(roofGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 }), roofs, (im, [x, z, w, h, d, c, wallH], i) => {
+      p.set(x, SIDEWALK_H + wallH, z); q.identity(); sc.set(w, h, d); m4.compose(p, q, sc); im.setMatrixAt(i, m4); im.setColorAt(i, col.set(c));
+    });
+    roofMesh.castShadow = true;
+    const garden = new THREE.PlaneGeometry(1, 1);
+    garden.rotateX(-Math.PI / 2);
+    inst(garden, new THREE.MeshStandardMaterial({ color: 0x5f9a45, roughness: 1, map: noiseTexture(0x5f9a45, 40, 128, 4, rng) }), gardens, (im, [x, z, w, d], i) => {
+      p.set(x, SIDEWALK_H + 0.012, z); q.identity(); sc.set(w, 1, d); m4.compose(p, q, sc); im.setMatrixAt(i, m4);
+    }).receiveShadow = true;
+    inst(boxGeo, new THREE.MeshStandardMaterial({ color: 0x3f6b33, roughness: 1 }), hedges, (im, [x, z, w, h, d], i) => {
+      p.set(x, SIDEWALK_H, z); q.identity(); sc.set(w, h, d); m4.compose(p, q, sc); im.setMatrixAt(i, m4);
+    });
+    inst(new THREE.BoxGeometry(1.2, 2.3, 0.12), new THREE.MeshStandardMaterial({ color: 0x5a3a24, roughness: 0.6 }), doors, (im, [x, z, nz], i) => {
+      p.set(x, SIDEWALK_H + 1.15, z); q.setFromAxisAngle(yAxis, nz > 0 ? 0 : Math.PI); sc.set(1, 1, 1); m4.compose(p, q, sc); im.setMatrixAt(i, m4);
+    });
+    // Alberi di quartiere
+    const trunkGeo = new THREE.CylinderGeometry(0.16, 0.22, 3, 6);
+    trunkGeo.translate(0, 1.5, 0);
+    const crownGeo = new THREE.IcosahedronGeometry(1.7, 1);
+    crownGeo.translate(0, 4, 0);
+    const tMat = new THREE.MeshStandardMaterial({ color: 0x5a3f2c, roughness: 1 });
+    const cMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1, flatShading: true });
+    inst(trunkGeo, tMat, trees, (im, [x, z], i) => {
+      p.set(x, SIDEWALK_H, z); q.identity(); sc.set(1, 1, 1); m4.compose(p, q, sc); im.setMatrixAt(i, m4);
+      this.addStaticBox(x, SIDEWALK_H + 1.5, z, 0.25, 1.5, 0.25);
+    }).castShadow = true;
+    inst(crownGeo, cMat, trees, (im, [x, z], i) => {
+      p.set(x, SIDEWALK_H, z); q.setFromAxisAngle(yAxis, i * 1.7); sc.setScalar(0.85 + ((i * 37) % 10) / 20); m4.compose(p, q, sc); im.setMatrixAt(i, m4);
+      im.setColorAt(i, col.setHSL(0.24 + ((i * 13) % 10) / 120, 0.45, 0.3));
+    }).castShadow = true;
+    // Lampioni di quartiere
+    const poleGeo = new THREE.CylinderGeometry(0.07, 0.1, 5, 6);
+    poleGeo.translate(0, 2.5, 0);
+    const headGeo = new THREE.SphereGeometry(0.28, 10, 8);
+    headGeo.translate(0, 5.1, 0);
+    inst(poleGeo, new THREE.MeshStandardMaterial({ color: 0x2c3036, metalness: 0.6, roughness: 0.5 }), lamps, (im, [x, z], i) => {
+      m4.makeTranslation(x, SIDEWALK_H, z); im.setMatrixAt(i, m4);
+      this.addStaticBox(x, SIDEWALK_H + 2.5, z, 0.12, 2.5, 0.12);
+    });
+    inst(headGeo, this.lampHeadMat, lamps, (im, [x, z], i) => { m4.makeTranslation(x, SIDEWALK_H, z); im.setMatrixAt(i, m4); });
   }
 
   buildSky() {
@@ -925,6 +1304,12 @@ export class CityWorld {
 
   /* ---------- Query ---------- */
   getDistrictAt(x, z) {
+    const r = Math.max(Math.abs(x), Math.abs(z));
+    if (r > URBAN_HALF + 8) return DISTRICTS.country;
+    if (Math.abs(x) > HALF + ROAD / 2 || Math.abs(z) > HALF + ROAD / 2) {
+      const ring = Math.ceil((r - HALF) / CELL);
+      return ring >= 3 ? DISTRICTS.villas : DISTRICTS.suburb;
+    }
     const row = THREE.MathUtils.clamp(Math.floor((z + HALF) / CELL), 0, GRID - 1);
     return districtForRow(row);
   }
@@ -1076,7 +1461,7 @@ export class DayCycle {
     sky.sunColor.value.setRGB(1, 0.85 + day * 0.1, 0.7 + day * 0.2).multiplyScalar(day > 0.02 ? 1 : 0);
     this.fog.color.copy(this._bottom);
     this.fog.near = 90;
-    this.fog.far = 480 + day * 420;
+    this.fog.far = 750 + day * 950;
 
     // Sole (o luna) che segue il giocatore per le ombre
     const sunUp = elev > -0.05;

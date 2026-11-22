@@ -4,7 +4,7 @@ import * as CANNON from 'cannon-es';
 import { makePerson, HumanAnimator, randomLook } from './characters.js';
 import { GROUPS } from './playerstate.js';
 import { disposeObject3D } from './ui.js';
-import { BLOCK, GRID, CELL, HALF, districtForRow } from './world.js';
+import { BLOCK, GRID, CELL, HALF, RINGS, districtForRow } from './world.js';
 
 const SIDEWALK_Y = 0.2;
 const NAMES_M = ['Marco', 'Luca', 'Ahmed', 'Carlos', 'Kenji', 'Oleg', 'David', 'Samuel', 'Paolo', 'Tom'];
@@ -27,6 +27,7 @@ export class Npc {
     this.look = look;
     this.name = name || (look.sex === 'f' ? NAMES_F : NAMES_M)[Math.floor(Math.random() * 10)];
     this.mesh = makePerson(look);
+    this.mesh.userData.npc = this; // per il raycast dei proiettili
     this.animator = new HumanAnimator(this.mesh);
     this.pos = new THREE.Vector3(x, y, z);
     this.facing = facing;
@@ -60,7 +61,23 @@ export class Npc {
     this.speed = 0;
   }
 
-  update(dt) {
+  /** Colpito (o spinto a terra): resta sdraiato per qualche secondo, poi si rialza. */
+  knockDown(seconds = 12) {
+    this.downT = seconds;
+    this.stop();
+  }
+
+  update(dt, animate = true) {
+    if (this.downT > 0) {
+      this.downT -= dt;
+      this.body.position.set(this.pos.x, this.pos.y, this.pos.z);
+      this.mesh.position.set(this.pos.x, this.pos.y + 0.12, this.pos.z);
+      this.mesh.rotation.set(-Math.PI / 2, 0, 0, 'YXZ');
+      this.mesh.rotation.y = this.facing;
+      if (animate) this.animator.update(dt, { speed: 0, state: 'lie' });
+      if (this.downT <= 0) this.mesh.rotation.set(0, this.facing, 0);
+      return;
+    }
     let moving = false;
     if (this.path && this.pose === 'auto') {
       const target = this.path[this.pathIdx];
@@ -91,6 +108,7 @@ export class Npc {
     this.speed += ((moving ? this.walkSpeed : 0) - this.speed) * Math.min(1, dt * 8);
     this.body.velocity.set(0, 0, 0);
     this.body.position.set(this.pos.x, this.pos.y, this.pos.z);
+    if (!animate) return; // lontano dal giocatore: si muove ma non si anima (prestazioni)
     this.sync();
     this.animator.update(dt, { speed: this.speed, grounded: true, state: this.pose === 'auto' ? 'auto' : this.pose });
   }
@@ -159,7 +177,11 @@ export class NpcManager {
   spawnPedestrians(count) {
     const lane = BLOCK / 2 - 2.8;
     for (let i = 0; i < count; i++) {
-      const r = Math.floor(this.rng() * GRID), c = Math.floor(this.rng() * GRID);
+      // 70% in centro città, 30% nei quartieri residenziali
+      const inCity = this.rng() < 0.7;
+      const span = inCity ? GRID : GRID + RINGS * 2;
+      const off = inCity ? 0 : -RINGS;
+      const r = off + Math.floor(this.rng() * span), c = off + Math.floor(this.rng() * span);
       const cx = blockCenter(c), cz = blockCenter(r);
       const corners = [
         new THREE.Vector3(cx - lane, SIDEWALK_Y, cz - lane), new THREE.Vector3(cx + lane, SIDEWALK_Y, cz - lane),
@@ -264,19 +286,19 @@ export class NpcManager {
     for (const n of this.pedestrians) {
       const d = n.pos.distanceTo(playerFeet);
       // Si ferma se il giocatore gli è proprio davanti, poi riprende
-      if (d < 1.4) {
+      if (d < 1.4 || n.inConversation) {
         if (n.path) { n.savedPath = { path: n.path, idx: n.pathIdx, cb: n.onArrive }; n.path = null; }
         n.lookTarget = playerFeet;
       } else if (!n.path && n.savedPath) {
         n.path = n.savedPath.path; n.pathIdx = n.savedPath.idx; n.onArrive = n.savedPath.cb; n.savedPath = null;
         n.lookTarget = null;
       }
-      const near = d < 110;
+      const near = d < 75;
       n.mesh.visible = near;
       if (near) n.update(dt);
       else {
         // fuori vista: si muove lo stesso, senza animare
-        n.update(dt);
+        n.update(dt, false);
       }
     }
     for (const h of this.homeless) {

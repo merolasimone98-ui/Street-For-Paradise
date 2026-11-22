@@ -92,7 +92,8 @@ export class Intro {
   }
 
   /* ---------- Fase 1: zoom dallo spazio ---------- */
-  async start() {
+  async start(sex = null) {
+    this.sex = sex;
     this.attach();
     this.phase = 'zoom';
     this.attempt = 0;
@@ -154,7 +155,7 @@ export class Intro {
     this.setButtons(false);
     this.attempt++;
 
-    const birth = generateBirth(this.prevCityId);
+    const birth = generateBirth(this.prevCityId, this.sex);
     this.prevCityId = birth.cityId;
     this.birth = birth;
 

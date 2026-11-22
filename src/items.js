@@ -24,6 +24,7 @@ export const ITEMS = {
   mazza: { name: 'Mazza da baseball', cat: 'armi', price: 80, hold: 'bat', icon: '🏏', desc: 'Legno di frassino.' },
   pistola: { name: 'Pistola 9mm', cat: 'armi', price: 2400, hold: 'pistol', icon: '🔫', desc: 'Richiede porto d\'armi. Solo per difesa.' },
   fondina: { name: 'Fondina', cat: 'armi', price: 70, icon: '🧷', desc: 'Accessorio per la pistola.' },
+  motosega: { name: 'Motosega', cat: 'attrezzi', price: 380, hold: 'chainsaw', icon: '🪚', desc: 'Impugnala e tieni premuto il tasto sinistro per accenderla.' },
   // Varie (minimarket)
   sacco_a_pelo: { name: 'Sacco a pelo', cat: 'varie', price: 55, icon: '🛌', desc: 'Caldo anche d\'inverno.' },
   tenda: { name: 'Tenda da campeggio', cat: 'varie', price: 140, icon: '⛺', desc: 'Due posti, montaggio rapido.' },
@@ -86,6 +87,8 @@ export const VEHICLE_MODELS = {
   berlina: { name: 'Berlina familiare', kind: 'car', price: 24500, colors: [0x1a202c, 0x718096, 0x2a4365, 0xe2e8f0] },
   suv: { name: 'SUV 4x4', kind: 'suv', price: 39000, colors: [0x1a1a1c, 0xe9e9e6, 0x4a5240] },
   sportiva: { name: 'Coupé sportiva', kind: 'sport', price: 86000, colors: [0xc53030, 0xd69e2e, 0x1a1a1c] },
+  // Non in vendita: volanti delle pattuglie
+  polizia: { name: 'Volante della Polizia', kind: 'car', price: 0, colors: [0xf2f4f7], hidden: true },
 };
 
 /* ---------- Menù di ristorante e pizzeria ---------- */
@@ -130,11 +133,28 @@ export const MENUS = {
   },
 };
 
+/* ---------- Bevande del bar "Paradise" (alcol = punti di ubriachezza) ---------- */
+export const DRINKS = [
+  { id: 'acqua_bar', name: 'Acqua tonica con limone', cat: 'Analcolici', price: 3, alcohol: 0, color: 'e8f4ff', stamina: 15 },
+  { id: 'cola_bar', name: 'Cola con ghiaccio', cat: 'Analcolici', price: 4, alcohol: 0, color: '3a1d0c', stamina: 20 },
+  { id: 'succo', name: 'Succo d\'arancia fresco', cat: 'Analcolici', price: 4, alcohol: 0, color: 'ff9a1f', stamina: 15, heal: 3 },
+  { id: 'virgin_mojito', name: 'Virgin mojito', cat: 'Analcolici', price: 6, alcohol: 0, color: 'c8f0b0', stamina: 20 },
+  { id: 'crodino', name: 'Aperitivo analcolico', cat: 'Analcolici', price: 4, alcohol: 0, color: 'ff6a1f', stamina: 10 },
+  { id: 'birra_bar', name: 'Birra media alla spina', cat: 'Alcolici', price: 5, alcohol: 9, color: 'f2c230' },
+  { id: 'vino_bar', name: 'Calice di vino rosso', cat: 'Alcolici', price: 6, alcohol: 10, color: '6d0f1c' },
+  { id: 'spritz', name: 'Spritz', cat: 'Alcolici', price: 7, alcohol: 11, color: 'ff6a1f' },
+  { id: 'mojito', name: 'Mojito', cat: 'Alcolici', price: 8, alcohol: 13, color: 'd9f2c4' },
+  { id: 'negroni', name: 'Negroni', cat: 'Alcolici', price: 9, alcohol: 16, color: 'b3122a' },
+  { id: 'whisky', name: 'Whisky on the rocks', cat: 'Alcolici', price: 10, alcohol: 18, color: 'c27a1d' },
+  { id: 'vodka', name: 'Shot di vodka', cat: 'Alcolici', price: 5, alcohol: 15, color: 'f4f8ff' },
+  { id: 'tequila', name: 'Shot di tequila con sale e lime', cat: 'Alcolici', price: 6, alcohol: 15, color: 'f6e7a0' },
+];
+
 /* ---------- Assortimento dei negozi ---------- */
 export const SHOP_STOCK = {
   market: ['panino', 'pizza_trancio', 'mela', 'barretta', 'acqua', 'caffe', 'pasto_pronto', 'coperta', 'sacco_a_pelo', 'tenda', 'candela'],
   pharmacy: ['cerotti', 'paracetamolo', 'ibuprofene', 'sciroppo', 'vitamine', 'kit_pronto_soccorso'],
-  weapons: ['cacciavite', 'torcia', 'coltello', 'mazza', 'pistola', 'fondina'],
+  weapons: ['cacciavite', 'torcia', 'motosega', 'coltello', 'mazza', 'pistola', 'fondina'],
   bar: ['caffe', 'acqua', 'panino', 'barretta'],
 };
 

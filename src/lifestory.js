@@ -909,6 +909,7 @@ export class LifeStory {
           }[path];
           return [
             { text: `${this.birthDay} ${MONTHS[this.birthMonth]} ${b.birthYear + 18}. ${b.name} compie diciotto anni. ${summary}` },
+            { text: `Qualche mese fa mamma e papà se ne sono andati insieme, in un incidente. Da oggi ${b.name} è ${b.sex === 'f' ? 'sola' : 'solo'} al mondo, ma porta con sé tutto il loro amore.` },
             { text: `Patrimonio iniziale: ${formatMoney(this.finalMoney())}. La porta si apre: ${b.city.city} ti aspetta.` },
           ];
         },
@@ -974,7 +975,7 @@ export class LifeStory {
     const b = this.birth;
     const ctx = {
       scene: this.scene, rng: this.rng, family: b.family, city: b.city, sex: b.sex, skin: b.skin, hair: b.hair,
-      birthYear: b.birthYear, motherSkin: b.skin, fatherSkin: b.skin,
+      birthYear: b.birthYear, motherSkin: b.mother ? b.mother.skin : b.skin, fatherSkin: b.father ? b.father.skin : b.skin,
       randomSkin: () => [0xf3d3b8, 0xe7bc98, 0xd29f78, 0xb7835b, 0x8d5a3b, 0x6b4129][Math.floor(this.rng() * 6)],
     };
     this.view = st.build(this.content, ctx);
@@ -1151,6 +1152,12 @@ export class LifeStory {
       background: this.state.tags.slice(0, 8),
       skin: b.skin,
       hair: b.hair,
+      height: b.height,
+      hairStyle: b.hairStyle,
+      region: b.region,
+      // Orfano a 18 anni: i genitori restano nei ricordi (scena del Paradiso)
+      orphan: true,
+      parents: { mother: b.mother || null, father: b.father || null },
     };
     this.onFinish(character);
   }

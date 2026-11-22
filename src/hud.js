@@ -1,13 +1,13 @@
 // HUD di gioco: identità, soldi, orologio, salute/stamina, tachimetro, prompt [E]/[F], azioni in corso, minimappa.
 import { $ } from './ui.js';
 import { formatMoney } from './birthdata.js';
-import { HALF, ROAD, MAP_ICONS } from './world.js';
+import { MAP_ICONS, WORLD_EXT, URBAN_HALF } from './world.js';
 
-const MAP_PPM = 2; // pixel per metro nell'immagine di sfondo
-const EXT = HALF + ROAD / 2 + 30;
+const MAP_PPM = 1.2; // pixel per metro nell'immagine di sfondo
+const EXT = WORLD_EXT;
 
 const DISTRICT_COLORS = {
-  rich: '#8b93a3', middle: '#9a9080', worker: '#7f8487', poor: '#8a7466', car: '#5a5f66', church: '#cfc3a8',
+  rich: '#8b93a3', middle: '#9a9080', worker: '#7f8487', poor: '#8a7466', car: '#5a5f66', church: '#cfc3a8', suburb: '#c9a98a', villas: '#d8b894',
 };
 
 export class HUD {
@@ -22,8 +22,13 @@ export class HUD {
       speed: $('hud-speed'), speedV: $('hud-speed-v'), speedName: $('hud-speed-name'),
       progress: $('action-progress'), progressBar: $('action-progress-bar'), progressText: $('action-progress-text'),
       prompt: $('interact-prompt'), promptE: $('prompt-e'), promptEText: $('prompt-e-text'), promptF: $('prompt-f'), promptFText: $('prompt-f-text'),
-      minimap: $('minimap-wrap'), aura: $('hud-aura'),
+      minimap: $('minimap-wrap'), aura: $('hud-aura-v'), auraBar: $('hud-aura-bar'), level: $('hud-level'),
+      levelBox: $('hud-aura-box'), drunkBox: $('hud-drunk'), drunkBar: $('hud-drunk-bar'), drunkV: $('hud-drunk-v'),
+      date: $('hud-date'),
+      wanted: $('hud-wanted'), crosshair: $('crosshair'), vehBar: $('hud-veh-bar'), vehV: $('hud-veh-v'),
     };
+    this.wantedKey = '';
+    this.levelTimer = null;
     this.canvas = $('minimap');
     this.ctx = this.canvas.getContext('2d');
     this.last = {};
@@ -38,8 +43,12 @@ export class HUD {
     c.width = c.height = size;
     const g = c.getContext('2d');
     const tx = (v) => (v + EXT) * MAP_PPM;
-    g.fillStyle = '#23262b';
+    g.fillStyle = '#34502c';
     g.fillRect(0, 0, size, size);
+    g.fillStyle = '#23262b';
+    g.fillRect(tx(-URBAN_HALF - 8), tx(-URBAN_HALF - 8), (URBAN_HALF + 8) * 2 * MAP_PPM, (URBAN_HALF + 8) * 2 * MAP_PPM);
+    const lake = this.world.mapData.lake;
+    if (lake) { g.fillStyle = '#2f6f8f'; g.beginPath(); g.arc(tx(lake.x), tx(lake.z), lake.r * MAP_PPM, 0, Math.PI * 2); g.fill(); }
     for (const b of this.world.mapData.blocks) {
       g.fillStyle = b.park ? '#3f5f35' : '#4a4d52';
       g.fillRect(tx(b.x - b.size / 2), tx(b.z - b.size / 2), b.size * MAP_PPM, b.size * MAP_PPM);
@@ -102,6 +111,16 @@ export class HUD {
     this.el.save.classList.add('show');
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.el.save.classList.remove('show'), 1800);
+  }
+
+  /** Animazione "livello raggiunto" sul riquadro Aura. */
+  flashLevel(level) {
+    this.el.level.textContent = String(level);
+    this.el.levelBox.classList.remove('levelup');
+    void this.el.levelBox.offsetWidth;
+    this.el.levelBox.classList.add('levelup');
+    clearTimeout(this.levelTimer);
+    this.levelTimer = setTimeout(() => this.el.levelBox.classList.remove('levelup'), 2600);
   }
 
   /* ---------- Prompt [E] / [F] ---------- */
@@ -196,11 +215,32 @@ export class HUD {
     this.el.health.classList.toggle('low', hp < 0.3);
     this.el.stamina.style.transform = `scaleX(${s.stamina / s.maxStamina})`;
     this.el.stamina.classList.toggle('low', s.exhausted);
-    // Tachimetro
+    // Aura (in alto a sinistra) e ubriachezza
+    this.el.auraBar.style.transform = `scaleX(${Math.max(0, Math.min(1, s.aura / 100))})`;
+    const drunk = s.drunk || 0;
+    this.el.drunkBox.classList.toggle('hidden', drunk < 0.5);
+    if (drunk >= 0.5) {
+      this.el.drunkBar.style.transform = `scaleX(${Math.min(1, drunk / 50)})`;
+      this.el.drunkBox.classList.toggle('danger', drunk > 35);
+    }
+    // Stelle della polizia (lampeggiano quando ti stanno perdendo di vista) e mirino
+    const wkey = `${s.stars || 0}|${!!s.starsBlink}`;
+    if (wkey !== this.wantedKey) {
+      this.wantedKey = wkey;
+      this.el.wanted.classList.toggle('hidden', !s.stars);
+      this.el.wanted.classList.toggle('blink', !!s.starsBlink);
+      [...this.el.wanted.children].forEach((c, i) => c.classList.toggle('on', i < (s.stars || 0)));
+    }
+    this.el.crosshair.classList.toggle('hidden', !s.crosshair);
+    // Tachimetro e salute del veicolo
     if (s.vehicle) {
       this.el.speed.classList.remove('hidden');
       this.setText('speedV', String(Math.round(Math.abs(s.vehicle.speed) * 3.6)));
       this.setText('speedName', s.vehicle.name);
+      const vh = s.vehicleHealth ?? 100;
+      this.el.vehBar.style.transform = `scaleX(${Math.max(0, vh / 100)})`;
+      this.el.vehBar.className = vh < 25 ? 'crit' : vh < 55 ? 'low' : '';
+      this.setText('vehV', vh <= 0 ? 'GUASTO' : `${Math.round(vh)}%`);
     } else {
       this.el.speed.classList.add('hidden');
     }
@@ -217,15 +257,21 @@ export class HUD {
       this.setText('district', s.district);
       this.setText('healthV', String(Math.round(s.health)));
       this.setText('staminaV', String(Math.round(s.stamina)));
-      this.setText('aura', `Aura ${Math.round(s.aura)}%`);
+      this.setText('aura', `${Math.round(s.aura)}%`);
+      this.setText('level', String(s.auraLevel || 0));
+      this.setText('drunkV', `${Math.round(s.drunk || 0)}%`);
+      if (s.date) {
+        this.setText('date', s.date);
+        this.el.date.classList.toggle('red', !!s.redDay);
+      }
     }
-    this.drawMinimap(s.x, s.z, s.facing, s.camYaw);
+    this.drawMinimap(s.x, s.z, s.facing, s.camYaw, s.police || []);
   }
 
-  drawMinimap(x, z, facing, camYaw) {
+  drawMinimap(x, z, facing, camYaw, police = []) {
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
-    const scale = 0.42;
+    const scale = 0.84 * (2 / MAP_PPM) / 2;
     ctx.save();
     ctx.fillStyle = '#1b1d21';
     ctx.fillRect(0, 0, W, H);
@@ -234,6 +280,14 @@ export class HUD {
     ctx.save();
     ctx.scale(scale, scale);
     ctx.drawImage(this.mapImage, -(x + EXT) * MAP_PPM, -(z + EXT) * MAP_PPM);
+    // Volanti della polizia: punti rossi/blu lampeggianti
+    const blink = Math.floor(performance.now() / 250) % 2;
+    for (const p of police) {
+      ctx.fillStyle = blink ? '#ff3b3b' : '#3b7bff';
+      ctx.beginPath();
+      ctx.arc((p.x - x) * MAP_PPM, (p.z - z) * MAP_PPM, 6 / scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
     ctx.rotate(Math.PI - facing);
     ctx.fillStyle = '#ffffff';

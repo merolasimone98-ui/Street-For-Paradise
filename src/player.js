@@ -16,15 +16,23 @@ function lerpAngle(a, b, t) {
 }
 
 /** Converte outfit (id dei vestiti) + personaggio in opzioni per makePerson. */
-export function lookFromOutfit(character, outfit) {
+export function lookFromOutfit(character, outfit, uniform = null) {
   const c = (id, fallback) => (id && CLOTHES[id] ? CLOTHES[id] : fallback);
   const shirt = c(outfit.shirt, { color: 0x7b7f86, sleeves: 'short' });
+  if (uniform === 'mechanic') {
+    // Tuta intera blu da meccanico (sopra i vestiti) e scarpe antinfortunistiche
+    return {
+      height: character.height || (character.sex === 'f' ? 1.66 : 1.78), skin: character.skin, hair: character.hair,
+      sex: character.sex, hairStyle: character.hairStyle || (character.sex === 'f' ? 'long' : 'short'),
+      shirt: 0x2b4f7e, sleeves: 'long', pants: 0x2b4f7e, shoes: 0x2a2a2a, cap: null, glasses: false, uniform: 'mechanic',
+    };
+  }
   return {
-    height: character.sex === 'f' ? 1.68 : 1.79,
+    height: character.height || (character.sex === 'f' ? 1.66 : 1.78),
     skin: character.skin,
     hair: character.hair,
     sex: character.sex,
-    hairStyle: character.sex === 'f' ? 'long' : 'short',
+    hairStyle: character.hairStyle || (character.sex === 'f' ? 'long' : 'short'),
     shirt: shirt.color,
     sleeves: shirt.sleeves || 'short',
     pants: c(outfit.pants, { color: 0x2d3d5c }).color,
@@ -68,8 +76,16 @@ export class Player {
     this.posePosition = null; // posizione forzata quando seduto/sdraiato/in sella
   }
 
+  /** Divisa da lavoro sopra i vestiti ('mechanic') oppure null per tornare ai propri abiti. */
+  setUniform(uniform) {
+    if (this.uniform === uniform) return;
+    this.uniform = uniform;
+    this.setOutfit(this.outfit);
+  }
+
   setOutfit(outfit) {
-    const look = lookFromOutfit(this.character, outfit);
+    this.outfit = outfit;
+    const look = lookFromOutfit(this.character, outfit, this.uniform || null);
     const old = this.mesh;
     this.mesh = makePerson(look);
     this.mesh.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
@@ -180,7 +196,10 @@ export class Player {
       const p = this.body.interpolatedPosition;
       this.mesh.position.set(p.x, p.y - PLAYER_RADIUS, p.z);
     }
-    if (this.pose !== 'lie') {
+    if (this.pose === 'ride' && this.rideQuat) {
+      // In sella il corpo segue piega e impennata del mezzo
+      this.mesh.quaternion.copy(this.rideQuat);
+    } else if (this.pose !== 'lie') {
       this.mesh.rotation.set(0, this.facing, 0);
     }
   }
@@ -190,11 +209,17 @@ export class Player {
     this.syncMesh();
     let state = 'auto';
     if (this.pose === 'sit') state = 'sit';
-    else if (this.pose === 'lie') state = 'lie';
+    else if (this.pose === 'lie') state = this.workState === 'under' ? 'under' : 'lie';
     else if (this.pose === 'ride') state = 'ride';
+    else if (this.workState) state = this.workState; // 'tinker' | 'hood' | 'give'
+    else if (this.drinkT != null) state = 'drink';
+    else if (this.aiming) state = 'aim';
     else if (this.phone) state = 'phone';
     // Con il telefono le gambe continuano a camminare, il braccio destro lo tiene davanti al viso.
-    this.animator.update(dt, { speed: this.pose === 'auto' ? this.speed : 0, grounded: this.grounded || this.pose !== 'auto', state });
+    this.animator.update(dt, {
+      speed: this.pose === 'auto' && !this.workState ? this.speed : 0, grounded: this.grounded || this.pose !== 'auto',
+      state, drinkT: this.drinkT || 0, lean: this.rideLean || 0,
+    });
   }
 
   /** Imposta una posa statica (seduto/sdraiato/in sella) in una posizione precisa. */
@@ -227,26 +252,61 @@ export class CameraRig {
     this.sensitivity = 0.0024;
     this.invertY = false;
     this.height = 1.55;
+    this.firstPerson = false;
+    this.allowFirstPerson = true;
+    this.fpBlend = 0;
     this.raycaster = new THREE.Raycaster();
     this._target = new THREE.Vector3();
     this._dir = new THREE.Vector3();
   }
 
-  update(dt, mouse, focus) {
+  /**
+   * @param {number} eyeHeight altezza degli occhi del personaggio (per la prima persona)
+   */
+  update(dt, mouse, focus, eyeHeight = 1.62) {
     this.yaw -= mouse.dx * this.sensitivity;
     this.pitch += mouse.dy * this.sensitivity * (this.invertY ? -1 : 1);
-    this.pitch = THREE.MathUtils.clamp(this.pitch, -0.45, 1.15);
-    this.targetDist = THREE.MathUtils.clamp(this.targetDist + mouse.wheel * 0.6, this.minDist, this.maxDist);
 
-    this._target.set(focus.x, focus.y + this.height, focus.z);
+    // Rotellina: avanti fino in fondo = prima persona, indietro = torna in terza persona
+    if (mouse.wheel < 0 && this.targetDist <= this.minDist + 0.01 && this.allowFirstPerson) this.firstPerson = true;
+    else if (mouse.wheel > 0 && this.firstPerson) { this.firstPerson = false; this.targetDist = this.minDist; this.dist = 0.4; }
+    else if (!this.firstPerson) this.targetDist = THREE.MathUtils.clamp(this.targetDist + mouse.wheel * 0.6, this.minDist, this.maxDist);
+    if (!this.allowFirstPerson) this.firstPerson = false;
+
+    this.pitch = THREE.MathUtils.clamp(this.pitch, this.firstPerson ? -1.3 : -0.45, this.firstPerson ? 1.3 : 1.15);
     const cp = Math.cos(this.pitch);
     this._dir.set(Math.sin(this.yaw) * cp, Math.sin(this.pitch), Math.cos(this.yaw) * cp).normalize();
 
-    let wanted = this.targetDist;
+    // Transizione fluida tra le due viste
+    this.fpBlend = this.fpBlend ?? 0;
+    this.fpBlend += ((this.firstPerson ? 1 : 0) - this.fpBlend) * (1 - Math.exp(-10 * dt));
+    if (this.fpBlend > 0.02) {
+      const eye = this._target.set(focus.x, focus.y + eyeHeight, focus.z);
+      const third = Math.max(0.0, (1 - this.fpBlend) * this.minDist);
+      this.camera.position.copy(eye).addScaledVector(this._dir, third + 0.02);
+      this._look = this._look || new THREE.Vector3();
+      this._look.copy(eye).addScaledVector(this._dir, -10);
+      this.camera.lookAt(this._look);
+      this.dist = third;
+      return;
+    }
+
+    this._target.set(focus.x, focus.y + this.height, focus.z);
+    // Mira (tasto destro con la pistola): camera ravvicinata sopra la spalla destra
+    this.aimBlend = this.aimBlend ?? 0;
+    this.aimBlend += ((this.aim ? 1 : 0) - this.aimBlend) * (1 - Math.exp(-14 * dt));
+    if (this.aimBlend > 0.01) {
+      const k = this.aimBlend;
+      this._target.x += Math.cos(this.yaw) * 0.55 * k;
+      this._target.z -= Math.sin(this.yaw) * 0.55 * k;
+      this._target.y += 0.12 * k;
+    }
+
+    let wanted = this.targetDist + (1.5 - this.targetDist) * this.aimBlend;
     this.raycaster.set(this._target, this._dir);
-    this.raycaster.far = this.targetDist + 0.3;
+    this.raycaster.far = wanted + 0.3;
     const hits = this.raycaster.intersectObjects(this.collidables, false);
-    if (hits.length) wanted = Math.max(0.7, hits[0].distance - 0.35);
+    if (hits.length) wanted = Math.min(wanted, Math.max(0.7, hits[0].distance - 0.35));
 
     // Avvicinamento rapido (niente compenetrazioni), allontanamento lento (niente tremolii)
     const rate = wanted < this.dist ? 22 : 3.5;

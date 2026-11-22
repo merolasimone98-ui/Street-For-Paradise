@@ -6,6 +6,8 @@ import { Intro } from './intro.js';
 import { Game } from './game.js';
 import { tweens } from './tween.js';
 import { $, fadeTo, setFade } from './ui.js';
+import { audio } from './audio.js';
+import { loadSettings, pixelRatioFor } from './settings.js';
 
 window.__SFP_BOOTED = true;
 
@@ -32,7 +34,7 @@ try {
   showBootError('WebGL non è disponibile su questo browser o dispositivo.');
   throw e;
 }
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setPixelRatio(pixelRatioFor(loadSettings().quality));
 renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
@@ -48,18 +50,18 @@ const app = { state: 'loading', intro: null, game: null };
 if (location.hash === '#debug') window.sfp = app;
 
 const menu = new Menu({
-  onNewGame: () => startNewGame(),
+  onNewGame: (sex) => startNewGame(sex),
   onContinue: (save) => continueGame(save),
 });
 
-function startNewGame() {
+function startNewGame(sex) {
   app.intro = new Intro({
     renderer,
     space,
     onComplete: (character) => enterGame({ character, save: null }),
   });
   app.state = 'intro';
-  app.intro.start();
+  app.intro.start(sex);
 }
 
 async function continueGame(save) {
@@ -92,6 +94,7 @@ async function enterGame({ character, save }) {
 
 async function backToMenu() {
   await fadeTo(1, 0.6, '#000');
+  audio.stopAllLoops();
   if (app.game) {
     app.game.dispose();
     app.game = null;

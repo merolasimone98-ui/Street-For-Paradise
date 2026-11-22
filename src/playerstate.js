@@ -32,9 +32,21 @@ export class PlayerState {
       goodDeeds: 0, badDeeds: 0, arrests: 0, meals: 0, donations: 0, donatedMoney: 0,
       stolenVehicles: 0, prayers: 0, nightsSlept: 0, ...(s.stats || {}),
     };
-    this.daily = { momCall: -1, prayer: -1, candle: -1, ...(s.daily || {}) };
+    this.daily = { momCall: -1, prayer: -1, candle: -1, mass: -1, confession: -1, ...(s.daily || {}) };
     this.homelessGifts = s.homelessGifts || {};
     this.exhausted = false;
+    // Fase 2: livelli Aura, chiesa, ubriachezza, case di proprietà
+    this.auraLevel = Math.max(0, Math.min(100, s.auraLevel ?? 0));
+    this.rewardsClaimed = Array.isArray(s.rewardsClaimed) ? s.rewardsClaimed.slice() : [];
+    this.lastChurchDay = s.lastChurchDay ?? 1;
+    this.lastChurchPenaltyDay = s.lastChurchPenaltyDay ?? 0;
+    this.drunk = Math.max(0, s.drunk ?? 0);
+    this.houses = Array.isArray(s.houses) ? s.houses.slice() : [];
+    this.levelUps = [];
+    // Fase 3: lavoro da meccanico e crimini
+    this.jobs = { mechanic: false, repairs: 0, earned: 0, ...(s.jobs || {}) };
+    this.stats.robberies = this.stats.robberies || 0;
+    this.stats.shots = this.stats.shots || 0;
   }
 
   serialize() {
@@ -43,6 +55,9 @@ export class PlayerState {
       auraLog: this.auraLog, cash: Math.round(this.cash), bank: this.bank, inventory: this.inventory,
       wardrobe: this.wardrobe, outfit: this.outfit, vehicles: this.vehicles, equipped: this.equipped,
       stats: this.stats, daily: this.daily, homelessGifts: this.homelessGifts,
+      auraLevel: this.auraLevel, rewardsClaimed: this.rewardsClaimed, lastChurchDay: this.lastChurchDay,
+      lastChurchPenaltyDay: this.lastChurchPenaltyDay, drunk: Math.round(this.drunk), houses: this.houses,
+      jobs: this.jobs,
     };
   }
 
@@ -118,9 +133,19 @@ export class PlayerState {
   restoreStamina(v) { this.stamina = clamp(this.stamina + v, 0, this.maxStamina); }
 
   /** Aura 1..100: sale con le buone azioni, scende con quelle cattive. */
+  /**
+   * Varia l'Aura. Raggiunto il 100% si sale di 1 Livello Aura (max 100) e la barra riparte dal 20%,
+   * conservando l'eccedenza. I livelli raggiunti vengono accodati in this.levelUps.
+   */
   changeAura(delta, reason) {
     const before = this.aura;
-    this.aura = clamp(this.aura + delta, 1, 100);
+    let next = this.aura + delta;
+    while (next >= 100 && this.auraLevel < 100) {
+      this.auraLevel++;
+      this.levelUps.push(this.auraLevel);
+      next = 20 + (next - 100);
+    }
+    this.aura = clamp(next, 1, 100);
     if (delta > 0) this.stats.goodDeeds++;
     else if (delta < 0) this.stats.badDeeds++;
     this.auraLog.unshift({ delta: Math.round(delta * 10) / 10, reason, t: Date.now() });

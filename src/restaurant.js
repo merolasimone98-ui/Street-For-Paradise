@@ -4,6 +4,8 @@ import { Npc } from './npcs.js';
 import { MENUS } from './items.js';
 import { formatMoney } from './birthdata.js';
 import { disposeObject3D } from './ui.js';
+import { audio } from './audio.js';
+import { makeDish } from './food.js';
 
 const WAIT_FOOD = 10; // secondi prima che arrivi il piatto
 const EAT_TIME = 8;
@@ -130,6 +132,7 @@ export class RestaurantService {
       this.spawnPlates();
       this.state = 'eating';
       this.timer = EAT_TIME;
+      this.eatSfx = 0;
       this.game.toast('Buon appetito!', 1600);
     });
   }
@@ -139,15 +142,11 @@ export class RestaurantService {
     const n = Math.min(4, this.order.length);
     for (let i = 0; i < n; i++) {
       const it = this.order[i];
-      const g = new THREE.Group();
-      const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.11, 0.02, 24), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.15 }));
-      const food = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: it.color, roughness: 0.7 }));
-      food.scale.set(1, 0.45, 1);
-      food.position.y = 0.012;
-      g.add(plate, food);
+      // Piatto 3D dettagliato in base alla portata (pizza, pasta, carne, pesce, dolci, bevande)
+      const g = makeDish(it.id, it.color);
+      g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
       const p = this.seat.plate;
-      g.position.set(p.x + (i - (n - 1) / 2) * 0.32, p.y, p.z - Math.floor(i / 2) * 0.05);
-      g.userData.food = food;
+      g.position.set(p.x + (i - (n - 1) / 2) * 0.3, p.y, p.z - (i % 2) * 0.08);
       this.game.scene.add(g);
       this.plates.push(g);
     }
@@ -181,6 +180,7 @@ export class RestaurantService {
     this.game.state.changeAura(-6, 'Hai consumato senza poter pagare (7° comandamento)');
     this.game.toast(`Non hai ${formatMoney(total)} in contanti! Il cameriere chiama la polizia…`, 4000);
     this.waiter.walkTo(this.routeToKitchen(), 1.8);
+    audio.siren(9);
     // La pattuglia entra e blocca l'uscita
     const ex = this.interior.exitPoint;
     for (let i = 0; i < 2; i++) {
@@ -211,6 +211,11 @@ export class RestaurantService {
       this.timer -= dt;
       const k = 1 - this.timer / EAT_TIME;
       this.game.hud.setProgress(k, 'Stai mangiando…');
+      this.eatSfx -= dt;
+      if (this.eatSfx <= 0) {
+        this.eatSfx = 1.6;
+        if (Math.random() < 0.3) audio.drink(); else audio.eat();
+      }
       for (const p of this.plates) p.userData.food.scale.setScalar(Math.max(0.05, 1 - k));
       if (this.timer <= 0) {
         this.game.hud.setProgress(null);

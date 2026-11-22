@@ -1,11 +1,13 @@
-// Menu principale: GIOCA -> NEW GAME / CONTINUA GAME.
+// Menu principale: GIOCA -> (NEW GAME -> scelta Uomo/Donna) / CONTINUA GAME, e IMPOSTAZIONI (volumi e FOV).
 import { SaveSystem } from './save.js';
 import { getCity, formatMoney } from './birthdata.js';
+import { settingsFormHtml, bindSettingsForm, loadSettings } from './settings.js';
+import { audio, bindUiSounds } from './audio.js';
 import { $, confirmDialog, isModalOpen } from './ui.js';
 
 export class Menu {
   /**
-   * @param {{ onNewGame: () => void, onContinue: (save: object) => void }} handlers
+   * @param {{ onNewGame: (sex: 'm'|'f') => void, onContinue: (save: object) => void }} handlers
    */
   constructor({ onNewGame, onContinue }) {
     this.onNewGame = onNewGame;
@@ -13,26 +15,46 @@ export class Menu {
 
     this.root = $('menu');
     this.btnPlay = $('btn-play');
+    this.btnSettings = $('btn-settings');
     this.options = $('play-options');
     this.btnNew = $('btn-new');
     this.btnContinue = $('btn-continue');
     this.continueSub = $('continue-sub');
+    this.settingsPanel = $('menu-settings');
+    this.gender = $('gender-screen');
 
     this.active = false;
     this.busy = false;
     this.expanded = false;
 
+    bindUiSounds(this.root);
+    bindUiSounds(this.settingsPanel);
+    bindUiSounds(this.gender);
     this.btnPlay.addEventListener('click', () => this.toggleOptions());
+    this.btnSettings.addEventListener('click', () => this.openSettings());
     this.btnNew.addEventListener('click', () => this.handleNew());
     this.btnContinue.addEventListener('click', () => this.handleContinue());
+    this.settingsPanel.addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === this.settingsPanel) this.closeSettings(); });
+    this.gender.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-sex]');
+      if (b) this.chooseSex(b.dataset.sex);
+      else if (e.target.closest('[data-gback]')) this.closeGender();
+    });
     this._onKey = (e) => this.onKey(e);
     window.addEventListener('keydown', this._onKey);
   }
 
   onKey(e) {
     if (!this.active || this.busy || isModalOpen()) return;
+    if (!this.settingsPanel.classList.contains('hidden')) {
+      if (e.code === 'Escape') this.closeSettings();
+      return;
+    }
+    if (!this.gender.classList.contains('hidden')) {
+      if (e.code === 'Escape') this.closeGender();
+      return;
+    }
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-      // Se il focus è già su un pulsante lascia che sia il browser a "cliccarlo".
       if (document.activeElement && document.activeElement.tagName === 'BUTTON' && this.root.contains(document.activeElement)) return;
       e.preventDefault();
       if (!this.expanded) this.toggleOptions(true);
@@ -64,12 +86,25 @@ export class Menu {
     this.options.classList.toggle('open', this.expanded);
     this.btnPlay.classList.toggle('open', this.expanded);
     this.options.setAttribute('aria-hidden', String(!this.expanded));
-    const tab = this.expanded ? '0' : '-1';
-    this.btnNew.tabIndex = Number(tab);
-    this.btnContinue.tabIndex = Number(tab);
+    const tab = this.expanded ? 0 : -1;
+    this.btnNew.tabIndex = tab;
+    this.btnContinue.tabIndex = tab;
     if (this.expanded) this.refresh();
   }
 
+  /* ---------- Impostazioni dal menu principale ---------- */
+  openSettings() {
+    this.settingsPanel.querySelector('#menu-settings-form').innerHTML = settingsFormHtml(loadSettings(), { full: true });
+    this.unbindSettings = bindSettingsForm(this.settingsPanel.querySelector('#menu-settings-form'));
+    this.settingsPanel.classList.remove('hidden');
+  }
+
+  closeSettings() {
+    if (this.unbindSettings) { this.unbindSettings(); this.unbindSettings = null; }
+    this.settingsPanel.classList.add('hidden');
+  }
+
+  /* ---------- Nuova vita: prima si sceglie il sesso ---------- */
   async handleNew() {
     if (this.busy || !this.expanded) return;
     if (SaveSystem.has()) {
@@ -81,9 +116,26 @@ export class Menu {
       });
       if (!ok) return;
     }
+    this.gender.classList.remove('hidden');
+    requestAnimationFrame(() => this.gender.classList.add('visible'));
+  }
+
+  closeGender() {
+    this.gender.classList.remove('visible');
+    setTimeout(() => this.gender.classList.add('hidden'), 400);
+  }
+
+  async chooseSex(sex) {
+    if (this.busy) return;
     this.busy = true;
+    audio.confirm();
+    this.gender.classList.add('chosen-' + sex);
+    await new Promise((r) => setTimeout(r, 650));
+    this.gender.classList.remove('visible');
     await this.hide();
-    this.onNewGame();
+    this.gender.classList.add('hidden');
+    this.gender.classList.remove('chosen-m', 'chosen-f');
+    this.onNewGame(sex);
   }
 
   async handleContinue() {
@@ -99,14 +151,12 @@ export class Menu {
   }
 
   show() {
-    // Il menu non deve mai convivere con il Pointer Lock.
     if (document.pointerLockElement) document.exitPointerLock();
     this.busy = false;
     this.active = true;
     this.toggleOptions(false);
     this.refresh();
     this.root.classList.remove('hidden');
-    // Riavvia le animazioni CSS d'ingresso.
     this.root.querySelectorAll('.menu-kicker, .t-line, .title-rule, .menu-buttons, .menu-footer').forEach((el) => {
       el.style.animation = 'none';
       void el.offsetWidth;
@@ -114,11 +164,13 @@ export class Menu {
     });
     requestAnimationFrame(() => this.root.classList.add('visible'));
     setTimeout(() => { if (this.active) this.btnPlay.focus({ preventScroll: true }); }, 1300);
+    audio.playMusic('menu');
   }
 
   hide() {
     this.active = false;
     this.root.classList.remove('visible');
+    this.closeSettings();
     if (document.activeElement && this.root.contains(document.activeElement)) document.activeElement.blur();
     return new Promise((resolve) => {
       setTimeout(() => {

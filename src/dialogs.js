@@ -1,7 +1,9 @@
 // Finestre di dialogo del gameplay: negozi, concessionario, banca, ATM, menù ristorante, scontrino, donazioni, guardaroba.
-import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, itemInfo } from './items.js';
+import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, DRINKS, itemInfo } from './items.js';
+import { calendarHtml, dayInfo, formatDate, MONTHS_IT } from './calendar.js';
 import { formatMoney } from './birthdata.js';
 import { $ } from './ui.js';
+import { audio, bindUiSounds } from './audio.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
@@ -24,6 +26,7 @@ export class Dialogs {
       if (this.keyHandler) this.keyHandler(e);
     };
     window.addEventListener('keydown', this._onKey);
+    bindUiSounds(this.root);
     this.root.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-act]');
       if (btn && this.handlers && this.handlers[btn.dataset.act]) this.handlers[btn.dataset.act](btn.dataset, btn);
@@ -118,6 +121,7 @@ export class Dialogs {
               return;
             }
             this.game.state.addItem(d.id, 1);
+            audio.cash();
             this.game.toast(`Acquistato: ${it.name}`);
             render();
           },
@@ -155,6 +159,7 @@ export class Dialogs {
             const c = CLOTHES[d.id];
             if (!s.payWith(c.price, this.payMethod)) { this.game.toast('Fondi insufficienti.'); return; }
             s.addItem(d.id);
+            audio.cash();
             s.outfit[c.slot] = d.id;
             this.game.refreshOutfit();
             this.game.toast(`Hai comprato: ${c.name}`);
@@ -201,7 +206,7 @@ export class Dialogs {
   dealer(delivery = false) {
     const fee = delivery ? 150 : 0;
     const render = (selected = {}) => {
-      const rows = Object.entries(VEHICLE_MODELS).map(([id, m]) => {
+      const rows = Object.entries(VEHICLE_MODELS).filter(([, m]) => !m.hidden).map(([id, m]) => {
         const color = selected[id] ?? m.colors[0];
         return `<div class="shop-row">
           <div class="shop-icon">${{ bike: '🚲', scooter: '🛵', moto: '🏍️' }[m.kind] || '🚗'}</div>
@@ -211,7 +216,7 @@ export class Dialogs {
       }).join('');
       this.show({
         title: delivery ? 'Concessionario · ordine telefonico' : 'Concessionario',
-        subtitle: delivery ? 'Consegna a domicilio vicino a te (+$150).' : 'Auto, moto, motorini e bici. Il veicolo ti aspetta in strada davanti al salone.',
+        subtitle: delivery ? 'Consegna a domicilio vicino a te (+€ 150).' : 'Auto, moto, motorini e bici. Il veicolo ti aspetta in strada davanti al salone.',
         wide: true,
         body: this.payToggleHtml() + `<div class="shop-list">${rows}</div>`,
         handlers: {
@@ -220,8 +225,80 @@ export class Dialogs {
           buy: (d) => {
             const m = VEHICLE_MODELS[d.id];
             if (!this.game.state.payWith(m.price + fee, this.payMethod)) { this.game.toast('Fondi insufficienti per questo veicolo.'); return; }
+            audio.cash();
             this.close();
             this.game.onPurchaseVehicle(d.id, Number(d.c), delivery);
+          },
+        },
+      });
+    };
+    render();
+  }
+
+  /* ---------- Concessionario: ritiro dell'usato ---------- */
+  sellVehicle() {
+    const g = this.game;
+    const render = (msg = '') => {
+      const list = g.vehicles.list.filter((v) => v.owner === 'player' || v.owner === 'stolen');
+      const rows = list.map((v) => {
+        const offer = g.vehicleSellPrice(v);
+        const stolen = v.owner === 'stolen';
+        return `<div class="shop-row">
+          <div class="shop-icon">${{ bike: '🚲', scooter: '🛵', moto: '🏍️' }[v.kind] || '🚗'}</div>
+          <div class="shop-info"><b>${esc(v.name)}</b><span>Condizioni: <b class="${v.health < 40 ? 'warn' : ''}">${Math.round(v.health)}%</b> · a ${Math.round(Math.hypot(v.body.position.x - g.mapPosition().x, v.body.position.z - g.mapPosition().z))} m${stolen ? ' · <span class="warn">rubato</span>' : ''}</span></div>
+          ${stolen ? '<span class="muted">Senza documenti</span>' : `<button class="btn-solid small" data-act="sell" data-uid="${v.uid}">Vendi · ${formatMoney(offer)}</button>`}
+        </div>`;
+      }).join('') || '<p class="muted">Non possiedi veicoli da vendere.</p>';
+      this.show({
+        title: 'Ritiro usato · valutazione',
+        subtitle: 'Offerta in base al listino (55%) e allo stato del mezzo. I veicoli rubati non si possono vendere.',
+        wide: true,
+        body: `${msg}<div class="shop-list">${rows}</div>`,
+        handlers: {
+          sell: (d) => {
+            const v = g.vehicles.list.find((x) => x.uid === d.uid);
+            if (!v) return;
+            const offer = g.vehicleSellPrice(v);
+            g.sellVehicle(v);
+            audio.cash();
+            render(`<p class="ok">Venduto: ${esc(v.name)} per ${formatMoney(offer)}.</p>`);
+            this.refreshWallet();
+          },
+        },
+      });
+    };
+    render();
+  }
+
+  /** Officina (fuori turno): il meccanico ripara i tuoi veicoli a pagamento. */
+  repairShop() {
+    const g = this.game;
+    const render = (msg = '') => {
+      const list = g.vehicles.list.filter((v) => (v.owner === 'player' || v.owner === 'stolen') && v.health < 99.5);
+      const rows = list.map((v) => {
+        const cost = g.repairCost(v);
+        return `<div class="shop-row">
+          <div class="shop-icon">${{ bike: '🚲', scooter: '🛵', moto: '🏍️' }[v.kind] || '🚗'}</div>
+          <div class="shop-info"><b>${esc(v.name)}</b><span>Salute del veicolo: <b class="${v.health < 40 ? 'warn' : ''}">${Math.round(v.health)}%</b>${v.broken ? ' · <span class="warn">in panne</span>' : ''}</span></div>
+          <button class="btn-solid small" data-act="fix" data-uid="${v.uid}">Ripara · ${formatMoney(cost)}</button>
+        </div>`;
+      }).join('') || '<p class="muted">Tutti i tuoi veicoli sono in perfette condizioni.</p>';
+      this.show({
+        title: 'Officina · accettazione',
+        subtitle: 'Il meccanico ripara carrozzeria e motore: il veicolo torna come nuovo ovunque sia parcheggiato.',
+        body: this.payToggleHtml() + msg + `<div class="shop-list">${rows}</div>`,
+        handlers: {
+          pay: (d) => { this.payMethod = d.m; render(); },
+          fix: (d) => {
+            const v = g.vehicles.list.find((x) => x.uid === d.uid);
+            if (!v) return;
+            const cost = g.repairCost(v);
+            if (!g.state.payWith(cost, this.payMethod)) { render('<p class="warn">Fondi insufficienti.</p>'); return; }
+            v.repair();
+            audio.cash();
+            audio.screwdriver();
+            render(`<p class="ok">${esc(v.name)} riparato!</p>`);
+            this.refreshWallet();
           },
         },
       });
@@ -447,6 +524,88 @@ export class Dialogs {
           veh: (d) => {
             this.game.onDonate(npc, { kind: 'vehicle', uid: d.uid });
             render(`<p class="ok">"Un veicolo? Non ci posso credere… grazie!"</p>`);
+          },
+        },
+      });
+    };
+    render();
+  }
+
+  /* ---------- Bar "Paradise": bevande consumate sul momento ---------- */
+  barMenu(onDrink) {
+    const s = this.game.state;
+    const render = () => {
+      const cats = ['Analcolici', 'Alcolici'];
+      const body = cats.map((c) => `<div class="shop-section">${c}</div>${DRINKS.filter((d) => d.cat === c).map((d) => `
+        <div class="shop-row">
+          <div class="swatch" style="background:#${d.color}"></div>
+          <div class="shop-info"><b>${esc(d.name)}</b><span>${d.alcohol ? `Alcol: +${d.alcohol}% ubriachezza` : 'Senza alcol'}${d.stamina ? ` · +${d.stamina} stamina` : ''}</span></div>
+          <div class="shop-owned"></div>
+          <button class="btn-solid small" data-act="drink" data-id="${d.id}">${formatMoney(d.price)}</button>
+        </div>`).join('')}`).join('');
+      this.show({
+        title: 'Locale "Paradise" · bancone',
+        subtitle: `Il barista prepara il drink e lo bevi subito.${s.drunk > 0 ? ` Ubriachezza attuale: <b>${Math.round(s.drunk)}%</b> (oltre il 50% svieni).` : ''}`,
+        body: this.payToggleHtml() + `<div class="shop-list">${body}</div>`,
+        handlers: {
+          pay: (d) => { this.payMethod = d.m; render(); },
+          drink: (d) => {
+            const drink = DRINKS.find((x) => x.id === d.id);
+            if (!s.payWith(drink.price, this.payMethod)) { this.game.toast('Fondi insufficienti.'); return; }
+            audio.cash();
+            this.close();
+            onDrink(drink);
+          },
+        },
+      });
+    };
+    render();
+  }
+
+  /* ---------- Calendario liturgico sfogliabile ---------- */
+  calendar(today) {
+    let y = today.getFullYear(), m = today.getMonth();
+    const render = () => {
+      const info = dayInfo(today);
+      this.show({
+        title: `${MONTHS_IT[m]} ${y}`,
+        subtitle: `Oggi: <b>${formatDate(today, true)}</b>${info.feast ? ` · <span class="red">${esc(info.feast)}</span>` : info.sunday ? ' · <span class="red">Domenica</span>' : ''}`,
+        wide: true,
+        body: `<div class="cal-nav"><button class="btn-ghost small" data-act="prev">‹ Mese precedente</button><button class="btn-ghost small" data-act="today">Oggi</button><button class="btn-ghost small" data-act="next">Mese successivo ›</button></div>${calendarHtml(y, m, today)}`,
+        handlers: {
+          prev: () => { m--; if (m < 0) { m = 11; y--; } render(); },
+          next: () => { m++; if (m > 11) { m = 0; y++; } render(); },
+          today: () => { y = today.getFullYear(); m = today.getMonth(); render(); },
+        },
+      });
+    };
+    render();
+  }
+
+  /* ---------- Case in vendita ---------- */
+  houseForSale(door, { onBuy, onVisit }) {
+    const h = door.house;
+    const s = this.game.state;
+    const owned = s.houses.includes(h.id);
+    const render = (msg = '') => {
+      this.show({
+        title: owned ? 'La tua casa' : (h.kind === 'villetta' ? 'Villetta in vendita' : 'Casa in vendita'),
+        subtitle: owned ? 'È tua: puoi entrare, dormire e consultare il calendario.' : `${h.kind === 'villetta' ? 'Villetta indipendente con giardino' : 'Casa a due piani'} · Quartiere residenziale`,
+        body: `${msg}<div class="house-card"><div class="house-ico">${h.kind === 'villetta' ? '🏡' : '🏠'}</div>
+          <div><div class="house-price">${formatMoney(h.price)}</div><div class="muted">Pagamento in contanti o con carta (dal conto)</div></div></div>
+          ${this.payToggleHtml()}
+          <div class="dlg-buttons">
+            <button class="btn-ghost" data-act="visit">${owned ? 'Entra' : 'Visita la casa'}</button>
+            ${owned ? '' : `<button class="btn-solid" data-act="buy">Compra per ${formatMoney(h.price)}</button>`}
+          </div>`,
+        handlers: {
+          pay: (d) => { this.payMethod = d.m; render(); },
+          visit: () => { this.close(); onVisit(); },
+          buy: () => {
+            if (!s.payWith(h.price, this.payMethod)) { render('<p class="warn">Fondi insufficienti per questa casa.</p>'); return; }
+            audio.cash();
+            this.close();
+            onBuy();
           },
         },
       });

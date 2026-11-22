@@ -30,6 +30,24 @@ export class Input {
       this.wheel += Math.sign(e.deltaY);
     };
     this._blur = () => this.reset();
+    this.mouseDown = false;
+    this.rightDown = false;
+    this._mdown = (e) => {
+      if (!this.enabled || !document.pointerLockElement) return;
+      if (e.button === 0) {
+        this.mouseDown = true;
+        this.pressed.add('Mouse0');
+      } else if (e.button === 2) {
+        this.rightDown = true;
+        this.pressed.add('Mouse2');
+      }
+    };
+    this._mup = (e) => {
+      if (e.button === 0) this.mouseDown = false;
+      if (e.button === 2) this.rightDown = false;
+    };
+    // Il tasto destro serve per mirare: niente menu contestuale del browser durante il gioco
+    this._ctx = (e) => { if (document.pointerLockElement) e.preventDefault(); };
   }
 
   attach() {
@@ -38,9 +56,15 @@ export class Input {
     window.addEventListener('mousemove', this._move);
     window.addEventListener('wheel', this._wheel, { passive: true });
     window.addEventListener('blur', this._blur);
+    window.addEventListener('mousedown', this._mdown);
+    window.addEventListener('mouseup', this._mup);
+    window.addEventListener('contextmenu', this._ctx);
   }
 
   detach() {
+    window.removeEventListener('contextmenu', this._ctx);
+    window.removeEventListener('mousedown', this._mdown);
+    window.removeEventListener('mouseup', this._mup);
     window.removeEventListener('keydown', this._down);
     window.removeEventListener('keyup', this._up);
     window.removeEventListener('mousemove', this._move);
@@ -50,6 +74,8 @@ export class Input {
   }
 
   reset() {
+    this.mouseDown = false;
+    this.rightDown = false;
     this.keys.clear();
     this.pressed.clear();
     this.mouseDX = this.mouseDY = this.wheel = 0;

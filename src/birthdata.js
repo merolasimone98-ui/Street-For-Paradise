@@ -191,6 +191,63 @@ export const FAMILIES = [
 export const SKIN_TONES = [0xf3d3b8, 0xe7bc98, 0xd29f78, 0xb7835b, 0x8d5a3b, 0x6b4129, 0x4a2c1c];
 export const HAIR_COLORS = [0x1b1410, 0x2e1f15, 0x4a2f1d, 0x6b4a2b, 0xa8763e, 0xd8b27a, 0x2a2a2a];
 
+/**
+ * Caratteristiche fisiche tipiche per area geografica (distribuzioni, non stereotipi rigidi):
+ * skin = pesi sugli indici di SKIN_TONES, hair = pesi su HAIR_COLORS, height = [media, dev. standard] in metri.
+ */
+const REGIONS = {
+  med: { skin: [1, 4, 4, 2, 0, 0, 0], hair: [4, 4, 3, 1, 0, 0, 0], height: { m: [1.75, 0.07], f: [1.62, 0.06] }, styles: { m: ['short', 'short', 'curly', 'buzz'], f: ['long', 'long', 'curly', 'bun'] } },
+  north_eu: { skin: [6, 3, 1, 0, 0, 0, 0], hair: [0, 1, 2, 3, 3, 3, 0], height: { m: [1.81, 0.07], f: [1.67, 0.06] }, styles: { m: ['short', 'short', 'buzz'], f: ['long', 'long', 'bun'] } },
+  east_eu: { skin: [6, 3, 1, 0, 0, 0, 0], hair: [0, 2, 3, 3, 2, 2, 0], height: { m: [1.78, 0.07], f: [1.65, 0.06] }, styles: { m: ['short', 'buzz', 'buzz'], f: ['long', 'long', 'bun'] } },
+  mixed_eu: { skin: [3, 3, 2, 2, 2, 1, 1], hair: [3, 3, 2, 2, 1, 1, 0], height: { m: [1.77, 0.08], f: [1.64, 0.07] }, styles: { m: ['short', 'short', 'curly', 'buzz'], f: ['long', 'long', 'curly', 'bun'] } },
+  mixed_us: { skin: [3, 2, 2, 2, 2, 2, 1], hair: [3, 3, 2, 2, 1, 1, 0], height: { m: [1.76, 0.08], f: [1.63, 0.07] }, styles: { m: ['short', 'buzz', 'curly'], f: ['long', 'curly', 'bun', 'long'] } },
+  east_asia: { skin: [3, 5, 2, 0, 0, 0, 0], hair: [6, 2, 0, 0, 0, 0, 1], height: { m: [1.72, 0.06], f: [1.59, 0.05] }, styles: { m: ['short', 'short', 'buzz'], f: ['long', 'long', 'bun'] } },
+  south_asia: { skin: [0, 1, 3, 4, 3, 1, 0], hair: [6, 3, 0, 0, 0, 0, 1], height: { m: [1.67, 0.07], f: [1.54, 0.06] }, styles: { m: ['short', 'short', 'curly'], f: ['long', 'long', 'bun'] } },
+  latin_br: { skin: [1, 2, 3, 3, 2, 2, 1], hair: [4, 4, 2, 1, 0, 0, 0], height: { m: [1.73, 0.07], f: [1.60, 0.06] }, styles: { m: ['short', 'curly', 'buzz'], f: ['long', 'curly', 'long'] } },
+  latin_mx: { skin: [0, 2, 4, 4, 1, 0, 0], hair: [6, 3, 1, 0, 0, 0, 0], height: { m: [1.70, 0.07], f: [1.57, 0.06] }, styles: { m: ['short', 'short', 'buzz'], f: ['long', 'long', 'bun'] } },
+  latin_ar: { skin: [3, 4, 3, 1, 0, 0, 0], hair: [3, 4, 3, 1, 1, 0, 0], height: { m: [1.75, 0.07], f: [1.62, 0.06] }, styles: { m: ['short', 'curly', 'short'], f: ['long', 'long', 'curly'] } },
+  west_africa: { skin: [0, 0, 0, 1, 3, 4, 4], hair: [7, 2, 0, 0, 0, 0, 1], height: { m: [1.71, 0.07], f: [1.59, 0.06] }, styles: { m: ['buzz', 'buzz', 'curly', 'bald'], f: ['curly', 'bun', 'long'] } },
+  south_africa: { skin: [1, 1, 1, 2, 3, 3, 3], hair: [6, 2, 1, 1, 0, 0, 0], height: { m: [1.70, 0.07], f: [1.59, 0.06] }, styles: { m: ['buzz', 'short', 'curly'], f: ['curly', 'bun', 'long'] } },
+  north_africa: { skin: [0, 2, 4, 3, 1, 0, 0], hair: [6, 3, 1, 0, 0, 0, 0], height: { m: [1.73, 0.07], f: [1.60, 0.06] }, styles: { m: ['short', 'curly', 'buzz'], f: ['long', 'bun', 'long'] } },
+  med_east: { skin: [1, 3, 4, 2, 0, 0, 0], hair: [5, 4, 1, 0, 0, 0, 0], height: { m: [1.74, 0.07], f: [1.61, 0.06] }, styles: { m: ['short', 'short', 'curly'], f: ['long', 'long', 'bun'] } },
+  oceania: { skin: [4, 3, 2, 1, 1, 0, 0], hair: [2, 2, 3, 2, 2, 2, 0], height: { m: [1.79, 0.07], f: [1.65, 0.06] }, styles: { m: ['short', 'short', 'curly'], f: ['long', 'long', 'bun'] } },
+};
+const CITY_REGION = {
+  napoli: 'med', newyork: 'mixed_us', tokyo: 'east_asia', rio: 'latin_br', berlino: 'north_eu', lagos: 'west_africa',
+  mumbai: 'south_asia', cdmx: 'latin_mx', mosca: 'east_eu', sydney: 'oceania', cairo: 'north_africa', londra: 'mixed_eu',
+  seoul: 'east_asia', buenosaires: 'latin_ar', parigi: 'mixed_eu', istanbul: 'med_east', losangeles: 'mixed_us', johannesburg: 'south_africa',
+};
+
+function weightedIndex(weights, rng = Math.random) {
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = rng() * total;
+  for (let i = 0; i < weights.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return i;
+  }
+  return weights.length - 1;
+}
+
+/** Aspetto fisico realistico in base al luogo di nascita e al sesso. */
+export function physicalTraits(cityId, sex, rng = Math.random) {
+  const region = REGIONS[CITY_REGION[cityId]] || REGIONS.mixed_eu;
+  const skinIdx = weightedIndex(region.skin, rng);
+  let hairIdx = weightedIndex(region.hair, rng);
+  // Capelli molto chiari rari con carnagioni scure
+  if (skinIdx >= 4 && hairIdx >= 4) hairIdx = 0;
+  const [mean, sd] = region.height[sex];
+  const u = 1 - rng(), v = rng();
+  const height = Math.max(sex === 'f' ? 1.45 : 1.55, Math.min(sex === 'f' ? 1.86 : 2.0, mean + sd * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v)));
+  const styles = region.styles[sex];
+  return {
+    region: CITY_REGION[cityId] || 'mixed_eu',
+    skin: SKIN_TONES[skinIdx],
+    hair: HAIR_COLORS[hairIdx],
+    height: Math.round(height * 100) / 100,
+    hairStyle: styles[Math.floor(rng() * styles.length)],
+  };
+}
+
 const BLOOD = [['0+', 38], ['A+', 32], ['B+', 9], ['AB+', 3], ['0-', 7], ['A-', 7], ['B-', 2], ['AB-', 2]];
 
 export const getCity = (id) => CITIES.find((c) => c.id === id) || CITIES[0];
@@ -217,7 +274,9 @@ function gaussian(mean, sd, rng = Math.random) {
 const clampStat = (v) => Math.max(5, Math.min(99, Math.round(v)));
 
 export function formatMoney(n) {
-  return '$' + Math.round(n).toLocaleString('it-IT');
+  // Punto come separatore delle migliaia anche per i numeri a 4 cifre (es. € 5.400)
+  const v = Math.round(n);
+  return (v < 0 ? '−€ ' : '€ ') + String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
 export function formatCoords(lat, lon) {
@@ -227,11 +286,12 @@ export function formatCoords(lat, lon) {
 }
 
 /** Genera una destinazione di nascita casuale (diversa dalla città precedente). */
-export function generateBirth(excludeCityId = null) {
+export function generateBirth(excludeCityId = null, chosenSex = null) {
   const pool = CITIES.filter((c) => c.id !== excludeCityId);
   const city = pick(pool);
   const family = weighted(FAMILIES, (f) => f.weight);
-  const sex = Math.random() < 0.5 ? 'm' : 'f';
+  const sex = chosenSex === 'm' || chosenSex === 'f' ? chosenSex : Math.random() < 0.5 ? 'm' : 'f';
+  const traits = physicalTraits(city.id, sex);
 
   const genetics = {};
   for (const key of ['resistenza', 'carisma', 'riflessi']) {
@@ -255,8 +315,14 @@ export function generateBirth(excludeCityId = null) {
     weightKg: +(2.6 + Math.random() * 1.6).toFixed(2),
     blood: weighted(BLOOD, (b) => b[1])[0],
     bpm: Math.round(122 + genetics.riflessi * 0.4 + Math.random() * 8),
-    skin: pick(SKIN_TONES),
-    hair: pick(HAIR_COLORS),
+    skin: traits.skin,
+    hair: traits.hair,
+    height: traits.height,
+    hairStyle: traits.hairStyle,
+    region: traits.region,
+    // Genitori con tratti coerenti con le origini (servono per i ricordi in Paradiso)
+    mother: physicalTraits(city.id, 'f'),
+    father: physicalTraits(city.id, 'm'),
     seed: Math.floor(Math.random() * 1e9),
     birthYear: new Date().getFullYear() - 18,
   };

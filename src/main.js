@@ -1,138 +1,160 @@
+// Entry point: renderer condiviso, macchina a stati (menu -> intro -> gioco) e game loop.
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
-import { World } from './world.js';
-import { Player } from './player.js';
+import { SpaceScene } from './space.js';
+import { Menu } from './menu.js';
+import { Intro } from './intro.js';
+import { Game } from './game.js';
+import { tweens } from './tween.js';
+import { $, fadeTo, setFade } from './ui.js';
 
-// ---------------------------------------------------------------------------
-// Elementi DOM
-// ---------------------------------------------------------------------------
-const canvas = document.getElementById('game-canvas');
-const startScreen = document.getElementById('start-screen');
-const startHint = document.getElementById('start-hint');
-const hud = document.getElementById('hud');
+window.__SFP_BOOTED = true;
 
-// ---------------------------------------------------------------------------
-// Renderer
-// ---------------------------------------------------------------------------
-const renderer = new THREE.WebGLRenderer({
-  canvas,
-  antialias: true,
-  powerPreference: 'high-performance',
+// Errori asincroni non gestiti: li registriamo senza bloccare il gioco.
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[Street for Paradise] errore asincrono:', e.reason);
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+// Il gioco non deve mai restare con il mouse catturato fuori dal gameplay.
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement && app.state !== 'game') document.exitPointerLock();
+});
+
+function showBootError(message) {
+  $('loading').style.display = 'none';
+  $('boot-error-text').textContent = message;
+  $('boot-error').classList.remove('hidden');
+}
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas: $('game-canvas'), antialias: true, powerPreference: 'high-performance' });
+} catch (e) {
+  showBootError('WebGL non è disponibile su questo browser o dispositivo.');
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight, false);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.95;
+renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-// ---------------------------------------------------------------------------
-// Scena e telecamera
-// ---------------------------------------------------------------------------
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 2500);
+const space = new SpaceScene(renderer);
 
-// ---------------------------------------------------------------------------
-// Mondo fisico (Cannon-es)
-// ---------------------------------------------------------------------------
-const physicsWorld = new CANNON.World({
-  gravity: new CANNON.Vec3(0, -22, 0),
-});
-physicsWorld.broadphase = new CANNON.SAPBroadphase(physicsWorld);
-physicsWorld.allowSleep = false;
-physicsWorld.solver.iterations = 10;
-physicsWorld.defaultContactMaterial.friction = 0.3;
-physicsWorld.defaultContactMaterial.restitution = 0;
+/** Stati: 'loading' | 'menu' | 'intro' | 'transition' | 'game' */
+const app = { state: 'loading', intro: null, game: null };
 
-const staticMaterial = new CANNON.Material('static');
-const playerMaterial = new CANNON.Material('player');
-physicsWorld.addContactMaterial(
-  new CANNON.ContactMaterial(staticMaterial, playerMaterial, {
-    friction: 0,
-    restitution: 0,
-    contactEquationStiffness: 1e8,
-    contactEquationRelaxation: 3,
-  })
-);
-
-// ---------------------------------------------------------------------------
-// Moduli di gioco
-// ---------------------------------------------------------------------------
-const world = new World(scene, physicsWorld, staticMaterial, {
-  maxAnisotropy: renderer.capabilities.getMaxAnisotropy(),
+const menu = new Menu({
+  onNewGame: () => startNewGame(),
+  onContinue: (save) => continueGame(save),
 });
 
-const player = new Player({
-  scene,
-  physicsWorld,
-  camera,
-  material: playerMaterial,
-  spawn: world.spawnPoint,
-});
-
-// ---------------------------------------------------------------------------
-// Pointer Lock e schermata iniziale / pausa
-// ---------------------------------------------------------------------------
-function requestLock() {
-  if (document.pointerLockElement === canvas) return;
-  canvas.focus();
-  const result = canvas.requestPointerLock();
-  // Nei browser moderni requestPointerLock restituisce una Promise: gestiamo il rifiuto
-  // (es. click troppo ravvicinato dopo Esc) senza generare errori in console.
-  if (result && typeof result.catch === 'function') {
-    result.catch(() => {
-      startHint.textContent = 'Clicca di nuovo per riprendere';
-    });
-  }
+function startNewGame() {
+  app.intro = new Intro({
+    renderer,
+    space,
+    onComplete: (character) => enterGame({ character, save: null }),
+  });
+  app.state = 'intro';
+  app.intro.start();
 }
 
-startScreen.addEventListener('click', requestLock);
-canvas.addEventListener('click', requestLock);
-
-document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === canvas;
-  player.setActive(locked);
-  if (locked) {
-    startScreen.classList.add('hidden');
-    hud.classList.add('visible');
-  } else {
-    startHint.textContent = 'Pausa — Clicca per riprendere';
-    startScreen.classList.remove('hidden');
-  }
-});
-
-document.addEventListener('pointerlockerror', () => {
-  startHint.textContent = 'Pointer Lock non disponibile — clicca di nuovo';
-});
-
-// ---------------------------------------------------------------------------
-// Ridimensionamento
-// ---------------------------------------------------------------------------
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-// ---------------------------------------------------------------------------
-// Loop principale
-// ---------------------------------------------------------------------------
-const clock = new THREE.Clock();
-const FIXED_STEP = 1 / 60;
-const MAX_SUB_STEPS = 5;
-
-function animate() {
-  requestAnimationFrame(animate);
-
-  const dt = Math.min(clock.getDelta(), 0.1);
-
-  player.preStep(dt);
-  physicsWorld.step(FIXED_STEP, dt, MAX_SUB_STEPS);
-  player.postStep(dt);
-  world.update(dt, camera, player.position);
-
-  renderer.render(scene, camera);
+async function continueGame(save) {
+  app.state = 'transition';
+  await fadeTo(1, 0.5, '#000');
+  enterGame({ character: null, save });
 }
 
-animate();
+/** Da chiamare con lo schermo già coperto dal fade. */
+async function enterGame({ character, save }) {
+  if (app.intro) {
+    app.intro.dispose();
+    app.intro = null;
+  }
+  try {
+    app.game = new Game({ renderer, character, save, onExitToMenu: () => backToMenu() });
+  } catch (e) {
+    console.error(e);
+    app.game = null;
+    space.setMenuMode();
+    app.state = 'menu';
+    menu.show();
+    await fadeTo(0, 0.6);
+    return;
+  }
+  app.game.resize(window.innerWidth, window.innerHeight);
+  app.state = 'game';
+  await fadeTo(0, 1.3);
+}
+
+async function backToMenu() {
+  await fadeTo(1, 0.6, '#000');
+  if (app.game) {
+    app.game.dispose();
+    app.game = null;
+  }
+  space.setMenuMode();
+  space.resize(window.innerWidth, window.innerHeight);
+  app.state = 'menu';
+  menu.show();
+  await fadeTo(0, 0.9);
+}
+
+/* ---------- Resize ---------- */
+function onResize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  space.resize(w, h);
+  if (app.intro) app.intro.resize(w, h);
+  if (app.game) app.game.resize(w, h);
+}
+window.addEventListener('resize', onResize);
+
+/* ---------- Game loop ---------- */
+let last = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+  last = now;
+  tweens.update(dt);
+
+  switch (app.state) {
+    case 'intro':
+      if (app.intro) {
+        app.intro.update(dt);
+        renderer.render(app.intro.scene, app.intro.camera);
+      }
+      break;
+    case 'game':
+      if (app.game) {
+        app.game.update(dt);
+        app.game.render();
+      }
+      break;
+    default:
+      space.update(dt);
+      renderer.render(space.scene, space.camera);
+  }
+}
+requestAnimationFrame(frame);
+
+/* ---------- Avvio ---------- */
+(async function boot() {
+  setFade(1, '#000');
+  const loadingText = $('loading-text');
+  const timer = setTimeout(() => { loadingText.textContent = 'Generazione del pianeta…'; }, 2500);
+  try {
+    await space.ready;
+  } catch (e) {
+    console.warn(e);
+  }
+  clearTimeout(timer);
+  // Precompila gli shader della scena spaziale per evitare scatti all'ingresso nel menu.
+  renderer.compile(space.scene, space.camera);
+  $('loading').classList.add('done');
+  setTimeout(() => { $('loading').style.display = 'none'; }, 900);
+  app.state = 'menu';
+  menu.show();
+  await fadeTo(0, 1.4);
+})();

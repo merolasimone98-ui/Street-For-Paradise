@@ -14,28 +14,25 @@ Poi apri `http://localhost:8080`. I moduli ES6 non funzionano aprendo `index.htm
 
 | Tasto | Azione |
 | --- | --- |
-| WASD / frecce | Muoviti |
-| Shift | Corri |
-| Spazio | Salta |
+| WASD / frecce | Muoviti (alla guida: accelera, frena, sterza) |
+| Shift | Corri (consuma stamina) |
+| Spazio | Salta (alla guida: freno a mano) |
 | Mouse / rotella | Camera / zoom |
-| E | Entra / esci dagli edifici |
+| E | Interagisci: porte, negozi, sportelli, ATM, tavoli, letto, persone |
+| F | Sali/scendi dal veicolo, forza la serratura (serve il cacciavite speciale) |
+| TAB | Inventario · Portafoglio · Telefono |
+| ESC | Mappa · Impostazioni · Statistiche (Aura) |
 | C | Scheda personaggio |
 | V (tenuto premuto) | Salta la panoramica 0-18 anni |
-| Esc | Pausa |
 
-## Struttura `/src`
+## Cosa c'è in città
 
-- `main.js` — renderer, macchina a stati menu → intro → gioco, game loop
-- `menu.js` — menu principale (GIOCA → NEW GAME / CONTINUA GAME)
-- `intro.js` — zoom universo → Terra, scelta casuale della nascita, skip [V]
-- `space.js` — scena spaziale (stelle, Terra, atmosfera, marker)
-- `placenta.js` — placenta 3D con tratti genetici
-- `lifestory.js` — ospedale e panoramica 0-18 anni
-- `birthdata.js` — città, famiglie, generatore di nascita
-- `world.js` — città procedurale, porte accessibili, ciclo giorno/notte
-- `interiors.js` — interni 3D (casa, ospedale, minimarket, officina, banca, locale)
-- `player.js` — giocatore fisico + camera in terza persona
-- `game.js` — gameplay, Pointer Lock, pausa, porte [E], autosalvataggio
-- `hud.js`, `input.js`, `save.js`, `ui.js`, `tween.js`, `characters.js`
+Casa, Ospedale, Minimarket, Concessionario, Armeria, Boutique, 2 Farmacie, Banca con ATM, Trattoria, Pizzeria,
+Chiesa, Stazione di Polizia, Locale, bancomat sui marciapiedi, pedoni, senzatetto e veicoli parcheggiati.
+
+## Struttura
+
+Vedi `CLAUDE.md` per l'elenco completo dei moduli in `/src`.
 
 Il salvataggio è in `localStorage` (chiave `sfp_save_v1`): automatico ogni 30 s, in pausa e alla chiusura della pagina.
+Le impostazioni grafiche sono in `sfp_settings_v1`.

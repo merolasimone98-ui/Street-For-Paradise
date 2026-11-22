@@ -71,11 +71,37 @@
             </span>
           </button>
         </div>
+        <button id="btn-settings" class="btn-main btn-sub" type="button">
+          <span class="btn-main-label">IMPOSTAZIONI</span>
+          <span class="btn-main-arrow">⚙</span>
+        </button>
       </div>
     </div>
     <div class="menu-footer">
       <span>Premi <kbd>INVIO</kbd> per giocare</span>
       <span class="menu-version">v0.1 · Three.js + Cannon-es</span>
+    </div>
+  </section>
+
+  <!-- IMPOSTAZIONI DAL MENU PRINCIPALE -->
+  <section id="menu-settings" class="hidden" aria-label="Impostazioni">
+    <div class="ms-box">
+      <div class="ms-head"><div class="ms-title">Impostazioni</div><button class="btn-ghost small" data-close type="button">Chiudi</button></div>
+      <div id="menu-settings-form"></div>
+    </div>
+  </section>
+
+  <!-- SCELTA DEL SESSO (sfondo universo, colori rilassanti) -->
+  <section id="gender-screen" class="hidden" aria-label="Scegli chi sarai">
+    <div class="gs-stars"></div>
+    <div class="gs-content">
+      <div class="gs-kicker">PRIMA DI NASCERE</div>
+      <div class="gs-title">Chi sarai?</div>
+      <div class="gs-cards">
+        <button class="gs-card male" data-sex="m" type="button"><span class="gs-emoji">👨</span><b>Uomo</b><small>Una vita da figlio, da uomo</small></button>
+        <button class="gs-card female" data-sex="f" type="button"><span class="gs-emoji">👩</span><b>Donna</b><small>Una vita da figlia, da donna</small></button>
+      </div>
+      <button class="btn-ghost small" data-gback type="button">Indietro</button>
     </div>
   </section>
 
@@ -165,6 +191,19 @@
   <!-- HUD GAMEPLAY -->
   <section id="hud" class="hidden">
     <div class="hud-top-left">
+      <!-- Aura e Livello Aura (1-100) -->
+      <div class="hud-aura-box" id="hud-aura-box">
+        <div class="hud-level"><small>LIV</small><b id="hud-level">0</b></div>
+        <div class="hud-aura-main">
+          <div class="hud-aura-head"><span>✨ AURA</span><b id="hud-aura-v">50%</b></div>
+          <div class="hud-aura-track"><i id="hud-aura-bar"></i></div>
+        </div>
+      </div>
+      <!-- Ubriachezza: compare solo dopo aver bevuto alcolici -->
+      <div class="hud-drunk hidden" id="hud-drunk">
+        <div class="hud-aura-head"><span>🍸 UBRIACHEZZA</span><b id="hud-drunk-v">0%</b></div>
+        <div class="hud-drunk-track"><i id="hud-drunk-bar"></i><u></u></div>
+      </div>
       <div class="hud-name" id="hud-name">—</div>
       <div class="hud-location"><span id="hud-city">—</span> · <span id="hud-district">—</span></div>
       <div class="hud-family" id="hud-family">—</div>
@@ -175,17 +214,20 @@
       </div>
     </div>
     <div class="hud-top-right">
-      <div class="hud-money" id="hud-money">$0</div>
+      <div class="hud-wanted hidden" id="hud-wanted" aria-label="Livello di ricerca"><span>★</span><span>★</span><span>★</span></div>
+      <div class="hud-money" id="hud-money">€ 0</div>
       <div class="hud-meta"><span id="hud-age">18 anni</span> · <span id="hud-day">Giorno 1</span> · <span id="hud-clock">09:00</span></div>
-      <div class="hud-aura" id="hud-aura">Aura 50%</div>
+      <div class="hud-date" id="hud-date">—</div>
       <div class="hud-save" id="hud-save">Salvataggio…</div>
     </div>
     <div class="hud-minimap" id="minimap-wrap"><canvas id="minimap" width="180" height="180"></canvas></div>
-    <div class="hud-help">WASD muovi · SHIFT corri · SPAZIO salta · E interagisci · F veicolo · TAB inventario · C scheda · ESC menu</div>
+    <div class="hud-help">WASD muovi · SHIFT corri · SPAZIO salta · E interagisci · 1-4 rispondi · F veicolo · SHIFT in moto impenna · tasto destro mira · TAB inventario · C scheda · ESC menu</div>
 
     <!-- Salute e stamina (in basso a destra) -->
     <div class="hud-vitals">
-      <div class="hud-speed hidden" id="hud-speed"><b id="hud-speed-v">0</b><span>km/h</span><small id="hud-speed-name"></small></div>
+      <div class="hud-speed hidden" id="hud-speed"><b id="hud-speed-v">0</b><span>km/h</span><small id="hud-speed-name"></small>
+        <div class="veh-health"><span>🔧</span><div class="veh-track"><i id="hud-veh-bar"></i></div><b id="hud-veh-v">100%</b></div>
+      </div>
       <div class="vital"><span class="vital-ico">♥</span><div class="vital-bar health"><i id="vital-health"></i></div><b id="vital-health-v">100</b></div>
       <div class="vital"><span class="vital-ico">⚡</span><div class="vital-bar stamina"><i id="vital-stamina"></i></div><b id="vital-stamina-v">100</b></div>
     </div>
@@ -194,6 +236,10 @@
       <div id="prompt-e">Premi <kbd>E</kbd> per <span id="prompt-e-text"></span></div>
       <div id="prompt-f" class="hidden">Premi <kbd>F</kbd> per <span id="prompt-f-text"></span></div>
     </div>
+    <!-- Puntino di mira (pistola + tasto destro) -->
+    <div id="crosshair" class="hidden"></div>
+    <!-- Conversazione con gli NPC (stile GTA V) -->
+    <div id="convo" class="hidden" aria-live="polite"></div>
     <div id="action-progress" class="hidden"><div class="ap-text" id="action-progress-text"></div><div class="ap-track"><i id="action-progress-bar"></i></div></div>
   </section>
 
@@ -203,8 +249,12 @@
   <!-- Menu ESC: Mappa · Impostazioni · Statistiche -->
   <section id="esc-menu" class="hidden" aria-label="Menu di gioco"></section>
 
-  <!-- Menu TAB: Inventario · Portafoglio · Telefono -->
+  <!-- Menu TAB: Inventario compatto al centro + telefono in basso a sinistra -->
   <section id="tab-menu" class="hidden" aria-label="Inventario"></section>
+  <div id="phone-dock" class="hidden" aria-label="Telefono"></div>
+
+  <!-- Paradiso -->
+  <section id="paradise-ui" class="hidden" aria-label="Paradiso"></section>
 
   <!-- Didascalia a tutto schermo (notte, prigione, ospedale) -->
   <div id="big-caption" class="hidden"><div class="bc-kicker" id="bc-kicker"></div><div class="bc-title" id="bc-title"></div><div class="bc-sub" id="bc-sub"></div></div>

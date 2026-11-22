@@ -177,12 +177,37 @@
     <div class="hud-top-right">
       <div class="hud-money" id="hud-money">$0</div>
       <div class="hud-meta"><span id="hud-age">18 anni</span> · <span id="hud-day">Giorno 1</span> · <span id="hud-clock">09:00</span></div>
+      <div class="hud-aura" id="hud-aura">Aura 50%</div>
       <div class="hud-save" id="hud-save">Salvataggio…</div>
     </div>
-    <div class="hud-minimap"><canvas id="minimap" width="180" height="180"></canvas></div>
-    <div class="hud-help">WASD muovi · SHIFT corri · SPAZIO salta · E interagisci · C scheda · ESC pausa</div>
-    <div id="interact-prompt" class="hidden">Premi <kbd>E</kbd> per <span id="interact-text">entrare</span></div>
+    <div class="hud-minimap" id="minimap-wrap"><canvas id="minimap" width="180" height="180"></canvas></div>
+    <div class="hud-help">WASD muovi · SHIFT corri · SPAZIO salta · E interagisci · F veicolo · TAB inventario · C scheda · ESC menu</div>
+
+    <!-- Salute e stamina (in basso a destra) -->
+    <div class="hud-vitals">
+      <div class="hud-speed hidden" id="hud-speed"><b id="hud-speed-v">0</b><span>km/h</span><small id="hud-speed-name"></small></div>
+      <div class="vital"><span class="vital-ico">♥</span><div class="vital-bar health"><i id="vital-health"></i></div><b id="vital-health-v">100</b></div>
+      <div class="vital"><span class="vital-ico">⚡</span><div class="vital-bar stamina"><i id="vital-stamina"></i></div><b id="vital-stamina-v">100</b></div>
+    </div>
+
+    <div id="interact-prompt" class="hidden">
+      <div id="prompt-e">Premi <kbd>E</kbd> per <span id="prompt-e-text"></span></div>
+      <div id="prompt-f" class="hidden">Premi <kbd>F</kbd> per <span id="prompt-f-text"></span></div>
+    </div>
+    <div id="action-progress" class="hidden"><div class="ap-text" id="action-progress-text"></div><div class="ap-track"><i id="action-progress-bar"></i></div></div>
   </section>
+
+  <!-- Finestre di dialogo (negozi, banca, ATM, ristorante...) -->
+  <div id="dialog" class="hidden"><div class="dlg-box" id="dialog-box"></div></div>
+
+  <!-- Menu ESC: Mappa · Impostazioni · Statistiche -->
+  <section id="esc-menu" class="hidden" aria-label="Menu di gioco"></section>
+
+  <!-- Menu TAB: Inventario · Portafoglio · Telefono -->
+  <section id="tab-menu" class="hidden" aria-label="Inventario"></section>
+
+  <!-- Didascalia a tutto schermo (notte, prigione, ospedale) -->
+  <div id="big-caption" class="hidden"><div class="bc-kicker" id="bc-kicker"></div><div class="bc-title" id="bc-title"></div><div class="bc-sub" id="bc-sub"></div></div>
 
   <!-- SCHEDA PERSONAGGIO -->
   <aside id="char-card" class="hidden" aria-label="Scheda personaggio">
@@ -212,23 +237,14 @@
         <span><kbd>SHIFT</kbd> Corri</span>
         <span><kbd>SPAZIO</kbd> Salta</span>
         <span><kbd>ROTELLA</kbd> Zoom</span>
-        <span><kbd>E</kbd> Entra / Esci</span>
+        <span><kbd>E</kbd> Interagisci</span>
+        <span><kbd>F</kbd> Sali / scendi dal veicolo</span>
+        <span><kbd>TAB</kbd> Inventario · Telefono</span>
         <span><kbd>C</kbd> Scheda</span>
-        <span><kbd>ESC</kbd> Pausa</span>
+        <span><kbd>ESC</kbd> Mappa · Menu</span>
       </div>
     </div>
   </div>
-
-  <!-- PAUSA -->
-  <section id="pause" class="screen hidden" aria-label="Pausa">
-    <div class="pause-box">
-      <div class="pause-kicker">PAUSA</div>
-      <div class="pause-info" id="pause-info"></div>
-      <button id="btn-resume" class="btn-pause" type="button">Riprendi</button>
-      <button id="btn-save" class="btn-pause" type="button">Salva partita</button>
-      <button id="btn-menu" class="btn-pause" type="button">Menu principale</button>
-    </div>
-  </section>
 
   <div id="toast"></div>
   <div id="fade"></div>

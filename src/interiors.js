@@ -5,8 +5,11 @@ import * as CANNON from 'cannon-es';
 import { makePerson, HumanAnimator, randomLook } from './characters.js';
 import { disposeObject3D } from './ui.js';
 import { seededRandom } from './birthdata.js';
+import { tr } from './i18n.js';
 
 export const INTERIOR_ORIGIN = new THREE.Vector3(4000, 0, 4000);
+/** Garage di casa: 4 box affiancati, muso verso la serranda (+Z). */
+export const GARAGE_LAYOUT = { w: 18, d: 14, h: 4.4, bays: [-6.75, -2.25, 2.25, 6.75], bayZ: -1.8 };
 const DOOR_W = 1.8;
 const DOOR_H = 2.6;
 
@@ -141,7 +144,9 @@ function signTexture(text, color, bg = 'rgba(8,8,12,0.92)', w = 1024, h = 256) {
   g.font = `600 ${Math.floor(h * 0.5)}px "Oswald", "Impact", sans-serif`;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.fillText(text, w / 2, h / 2 + 4);
+  const label = tr(text); // insegne nella lingua scelta (al momento in cui entri nell'edificio)
+  g.font = `600 ${Math.floor(h * 0.5 * Math.min(1, 14 / Math.max(14, label.length * 0.9)))}px "Oswald", "Impact", sans-serif`;
+  g.fillText(label, w / 2, h / 2 + 4);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
@@ -588,7 +593,7 @@ const BUILDERS = {
     I.box(6.1, 0.05, 0.95, std(0x3f8f80, { roughness: 0.3 }), 0, 1.13, -3);
     I.box(0.5, 0.35, 0.05, std(0x111111), -1.2, 1.35, -3.3);
     I.npc({ skin: I.randomSkin(), shirt: 0xe6f0ee, pants: 0xe6f0ee, hair: 0x2a2018, sex: 'f' }, -0.5, -4.2, 0);
-    I.interact(-0.5, -2.1, 'farti visitare (cure complete € 150)', 'hospital', {}, 1.8);
+    I.interact(-0.5, -2.1, 'farti visitare (cure complete € 380)', 'hospital', {}, 1.8);
     I.npc({ skin: I.randomSkin(), shirt: 0x3f8f80, pants: 0x3f8f80, hair: 0x1a1410, sex: 'm' }, 1.6, -4.4, -0.3);
     I.sign('ACCETTAZIONE', '#9df5dc', 4, 0.6, 0, 3.2, -d / 2 + 0.02, 0);
     I.sign('PRONTO SOCCORSO  →', '#ff6b6b', 3.6, 0.5, w / 2 - 0.02, 2.8, -3, -Math.PI / 2);
@@ -706,7 +711,7 @@ const BUILDERS = {
     I.car(0, -4.4, 0, colors[Math.floor(rng() * colors.length)], 0.15);
     I.car(5.5, -4.4, -0.35, colors[Math.floor(rng() * colors.length)], 0.15);
     for (let i = 0; i < 3; i++) {
-      const price = 8000 + Math.floor(rng() * 40) * 1000;
+      const price = 16000 + Math.floor(rng() * 60) * 1000;
       I.sign(`€ ${price.toLocaleString('it-IT')}`, '#f0b43c', 1.4, 0.35, -5.5 + i * 5.5, 0.6, -0.9, 0);
     }
     // Ponte sollevatore con auto
@@ -1147,9 +1152,106 @@ const BUILDERS = {
     return BUILDERS.church(I, { ...ctx, variant: 'chapel' });
   },
 
-  /** Casa acquistabile nei quartieri: interno di casa (villetta = ricca, casa = ceto medio). */
+  /**
+   * Casa acquistabile nei quartieri: ogni casa ha un interno diverso (stile scelto dall'identificativo
+   * della casa, quindi sempre lo stesso per la stessa casa): classico, loft, rustico, famiglia, design.
+   */
   house(I, ctx) {
-    return BUILDERS.home(I, { ...ctx, familyId: ctx.houseTier || 'middle' });
+    const id = String(ctx.houseId || '');
+    let hsh = 7;
+    for (let i = 0; i < id.length; i++) hsh = (hsh * 31 + id.charCodeAt(i)) >>> 0;
+    const villa = ctx.houseTier === 'rich';
+    const variants = villa ? ['design', 'loft', 'classic', 'rustic'] : ['classic', 'loft', 'rustic', 'family'];
+    const variant = variants[hsh % variants.length];
+    if (variant === 'classic') return BUILDERS.home(I, { ...ctx, familyId: villa ? 'rich' : 'middle' });
+    return buildHouseVariant(I, variant, hsh);
+  },
+
+  /* ---------------- GARAGE DI CASA ---------------- */
+  homegarage(I) {
+    const rng = I.rng;
+    const { w, d, h, bays, bayZ } = GARAGE_LAYOUT;
+    const floorTex = TEX.concrete(0x80848a, rng, 3, 3, 6);
+    const floorMat = std(0xffffff, { map: floorTex, bumpMap: floorTex, bumpScale: 0.35, roughness: 0.32, metalness: 0.05 });
+    const floor = I.mesh(new THREE.PlaneGeometry(w, d), floorMat, 0, 0.01, 0);
+    floor.rotation.x = -Math.PI / 2;
+    const wallTex = TEX.concrete(0xc9c6bf, rng, 4, 1, 2);
+    const wallMat = std(0xffffff, { map: wallTex, bumpMap: wallTex, bumpScale: 0.4, roughness: 0.9 });
+    const T = 0.3;
+    I.box(w + T * 2, h, T, wallMat, 0, h / 2, -d / 2 - T / 2, { wall: true });
+    I.box(T, h, d, wallMat, -w / 2 - T / 2, h / 2, 0, { wall: true });
+    I.box(T, h, d, wallMat, w / 2 + T / 2, h / 2, 0, { wall: true });
+    I.box(w, 0.1, d, std(0x55595e, { roughness: 1 }), 0, h + 0.05, 0, { wall: true });
+    // Fascia gialla e grigia alla base delle pareti
+    I.box(w, 0.9, 0.02, std(0x5d6168, { roughness: 0.6 }), 0, 0.45, -d / 2 + 0.012);
+    // Serranda avvolgibile (doghe orizzontali) con collider: si attraversa solo in auto o premendo E
+    const slats = canvasTex(256, (g, s) => {
+      g.fillStyle = '#9aa3ab'; g.fillRect(0, 0, s, s);
+      for (let y = 0; y < s; y += 16) {
+        g.fillStyle = '#7c858d'; g.fillRect(0, y, s, 3);
+        g.fillStyle = '#b4bcc3'; g.fillRect(0, y + 3, s, 2);
+      }
+    }, 3, 3);
+    const shutterMat = std(0xffffff, { map: slats, bumpMap: slats, bumpScale: 0.6, metalness: 0.6, roughness: 0.4 });
+    I.box(w, h, 0.16, shutterMat, 0, h / 2, d / 2 + 0.08, { solid: true, wall: true });
+    // Linea gialla e nera davanti alla serranda
+    const stripe = canvasTex(128, (g, s) => {
+      g.fillStyle = '#1a1a1a'; g.fillRect(0, 0, s, s);
+      g.fillStyle = '#f0b43c';
+      for (let x = -s; x < s * 2; x += 32) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 16, 0); g.lineTo(x + 16 + s, s); g.lineTo(x + s, s); g.closePath(); g.fill(); }
+    }, 20, 1);
+    const hazard = I.mesh(new THREE.PlaneGeometry(w, 0.35), std(0xffffff, { map: stripe, roughness: 0.6 }), 0, 0.015, d / 2 - 0.35);
+    hazard.rotation.x = -Math.PI / 2;
+    // Box numerati: linee bianche a terra
+    const lineMat = std(0xf2f2ee, { roughness: 0.6 });
+    for (let i = 0; i <= bays.length; i++) {
+      const x = -w / 2 + i * (w / bays.length);
+      const l = I.mesh(new THREE.PlaneGeometry(0.12, 5.6), lineMat, x, 0.014, bayZ);
+      l.rotation.x = -Math.PI / 2;
+    }
+    bays.forEach((bx, i) => {
+      const num = canvasTex(128, (g, s) => {
+        g.clearRect(0, 0, s, s);
+        g.fillStyle = '#f2f2ee';
+        g.font = '700 96px "Oswald", "Impact", sans-serif';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText(String(i + 1), s / 2, s / 2 + 6);
+      });
+      const n = I.mesh(new THREE.PlaneGeometry(0.9, 0.9), std(0xffffff, { map: num, transparent: true, depthWrite: false, roughness: 0.6 }), bx, 0.016, bayZ + 2.2);
+      n.rotation.x = -Math.PI / 2;
+    });
+    // Luci
+    I.ambient(0xe9f2ff, 0x5a5650, 0.5);
+    for (const x of [-6, 0, 6]) I.light(x, h - 0.3, -1, 0xf2f6ff, 16, { fixture: 'panel', shadow: x === 0 });
+    I.sign('GARAGE', '#f0b43c', 3, 0.6, 0, h - 0.7, -d / 2 + 0.17, 0);
+    I.sign('SERRANDA · GUIDA IN AVANTI PER USCIRE', '#7dff9a', 4.6, 0.35, 0, h - 0.4, d / 2 - 0.01, Math.PI);
+    // Banco da lavoro, pannello attrezzi e computer del tuning sulla parete di fondo
+    const metal = std(0x8a2b2b, { metalness: 0.4, roughness: 0.5 });
+    I.box(4, 0.9, 0.8, metal, -4.5, 0.45, -d / 2 + 0.55, { solid: true, shadow: true });
+    I.box(4.1, 0.05, 0.85, std(0x3a2c22, { roughness: 0.7 }), -4.5, 0.925, -d / 2 + 0.55);
+    I.box(4, 1.4, 0.05, std(0x3a3d40, { metalness: 0.5 }), -4.5, 1.9, -d / 2 + 0.17);
+    for (let i = 0; i < 10; i++) I.box(0.05, 0.25 + (i % 3) * 0.08, 0.04, std(0xbfc4c9, { metalness: 0.9, roughness: 0.2 }), -6.2 + i * 0.38, 1.95, -d / 2 + 0.22);
+    I.box(0.6, 0.4, 0.05, new THREE.MeshStandardMaterial({ color: 0x050608, emissive: 0x4fa3ff, emissiveIntensity: 0.9 }), -3.2, 1.2, -d / 2 + 0.4);
+    I.box(0.08, 0.3, 0.08, std(0x222222), -3.2, 1.0, -d / 2 + 0.45);
+    I.interact(-3.6, -d / 2 + 1.6, 'aprire l\'officina tuning (vernice, cerchi, motore…)', 'tuning', {}, 1.6);
+    // Pneumatici impilati e scaffale
+    const tire = std(0x151515, { roughness: 0.9 });
+    for (let s = 0; s < 2; s++) for (let i = 0; i < 4; i++) {
+      I.mesh(new THREE.TorusGeometry(0.3, 0.13, 10, 20), tire, w / 2 - 0.8 - s * 0.9, 0.13 + i * 0.26, -d / 2 + 0.8).rotation.x = Math.PI / 2;
+    }
+    I.addBody(1.9, 1.1, 0.8, w / 2 - 1.25, 0.55, -d / 2 + 0.8);
+    const shelf = std(0x6f7479, { metalness: 0.6, roughness: 0.4 });
+    I.box(0.5, 2.2, 2.4, shelf, w / 2 - 0.3, 1.1, -d / 2 + 3.4, { solid: true });
+    for (let k = 0; k < 4; k++) for (let j = 0; j < 3; j++) {
+      I.box(0.35, 0.25, 0.4, std([0xd62828, 0x2a9d8f, 0xf77f00, 0x3a86ff][(k + j) % 4], { roughness: 0.6 }), w / 2 - 0.3, 0.35 + k * 0.5, -d / 2 + 2.6 + j * 0.8);
+    }
+    // Indicatore luminoso dell'uscita a piedi
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xf0b43c, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending });
+    const ring = I.mesh(new THREE.RingGeometry(0.45, 0.6, 40), ringMat, 0, 0.03, d / 2 - 0.9);
+    ring.rotation.x = -Math.PI / 2;
+    I.animators.push((t) => { ringMat.opacity = 0.35 + Math.sin(t * 3) * 0.2; });
+    return { w, d, h };
   },
 
   /* ---------------- STAZIONE DI POLIZIA ---------------- */
@@ -1180,6 +1282,186 @@ const BUILDERS = {
     return { w, d, h };
   },
 };
+
+/** Letto matrimoniale con comodino e lampada; registra il punto [E] "dormire". */
+function houseBed(I, bx, bz, frameColor, quiltColor, rotY = 0) {
+  const g = new THREE.Group();
+  const parts = [
+    [1.6, 0.4, 2.1, 0, 0.2, 0, std(frameColor, { roughness: 0.6 })],
+    [1.55, 0.2, 2.0, 0, 0.5, 0, std(0xf1eee6, { roughness: 1 })],
+    [1.56, 0.12, 1.3, 0, 0.62, 0.35, std(quiltColor, { roughness: 1 })],
+    [1.6, 0.9, 0.1, 0, 0.65, -1.0, std(frameColor, { roughness: 0.6 })],
+    [0.5, 0.14, 0.35, -0.38, 0.66, -0.75, std(0xffffff, { roughness: 1 })],
+    [0.5, 0.14, 0.35, 0.38, 0.66, -0.75, std(0xffffff, { roughness: 1 })],
+  ];
+  for (const [w, h, d, x, y, z, m] of parts) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    b.position.set(x, y, z);
+    b.castShadow = true;
+    g.add(b);
+  }
+  g.position.set(bx, 0, bz);
+  g.rotation.y = rotY;
+  I.group.add(g);
+  const sw = Math.abs(Math.sin(rotY)) > 0.5;
+  I.addBody(sw ? 2.1 : 1.6, 0.6, sw ? 1.6 : 2.1, bx, 0.3, bz);
+  const fx = Math.sin(rotY), fz = Math.cos(rotY);
+  I.interact(bx + fx * 1.0 + fz * 1.2, bz + fz * 1.0 - fx * 1.2, 'dormire fino al mattino', 'sleep', { lie: I.toWorld(bx + fx * 0.45, 0.74, bz + fz * 0.45), facing: rotY }, 1.6);
+}
+
+/** Interni alternativi delle case in vendita: loft, rustico, famiglia, design. */
+function buildHouseVariant(I, variant, hsh) {
+  const rng = I.rng;
+  const pick = (arr, k = 0) => arr[(hsh >>> k) % arr.length];
+  let w, d, h, floorMat, wallMat;
+  if (variant === 'loft') {
+    w = 13; d = 11; h = 3.8;
+    const ft = TEX.concrete(0x8c8a86, rng, 3, 3, 4);
+    floorMat = std(0xffffff, { map: ft, bumpMap: ft, bumpScale: 0.3, roughness: 0.35 });
+    const bt = TEX.brick(rng, 3, 1.2);
+    wallMat = std(0xffffff, { map: bt, bumpMap: bt, bumpScale: 0.8, roughness: 0.9 });
+  } else if (variant === 'rustic') {
+    w = 11; d = 10; h = 3.2;
+    const ft = TEX.wood(0x6b4a30, rng, 2, 2);
+    floorMat = std(0xffffff, { map: ft, bumpMap: ft, bumpScale: 0.6, roughness: 0.7 });
+    const pt = TEX.plaster(pick([0xe9d6b4, 0xdcc7a1, 0xefe0c4]), rng, 3, 1);
+    wallMat = std(0xffffff, { map: pt, bumpMap: pt, bumpScale: 0.6, roughness: 0.95 });
+  } else if (variant === 'family') {
+    w = 12; d = 10; h = 3.0;
+    const ft = TEX.tiles(pick([0xd8cbb0, 0xc9d3d8, 0xe2d9c8]), '#8d8470', rng, 8, 2, 2);
+    floorMat = std(0xffffff, { map: ft, bumpMap: ft, bumpScale: 0.3, roughness: 0.45 });
+    const pt = TEX.plaster(pick([0xe7efe4, 0xf1e6d6, 0xe3e8f1]), rng, 3, 1);
+    wallMat = std(0xffffff, { map: pt, roughness: 0.92 });
+  } else {
+    // design (villette)
+    w = 14; d = 12; h = 4.2;
+    const ft = TEX.marble(rng, 3, 3);
+    floorMat = std(0xffffff, { map: ft, roughness: 0.12, metalness: 0.05 });
+    const pt = TEX.plaster(0xf6f5f1, rng, 3, 1);
+    wallMat = std(0xffffff, { map: pt, roughness: 0.85 });
+  }
+  I.room({ w, d, h, floorMat, wallMat, trim: variant === 'design' ? 0x1d1d1f : variant === 'rustic' ? 0x4a3324 : 0x3a3733 });
+  const warm = 0xffe2b8;
+  I.ambient(0xfff4e6, 0x6b5a48, variant === 'design' ? 0.55 : 0.45);
+  const sky = 0xcfe2f2;
+
+  if (variant === 'loft') {
+    // Vetrata a nastro, lampade industriali, isola cucina, divano a L, letto su pedana, libreria
+    I.window(w / 2 - 0.02, 1.9, -1.2, 4.2, 2.2, -Math.PI / 2, sky);
+    I.window(-w / 2 + 0.02, 1.9, -1.5, 3.2, 2.2, Math.PI / 2, sky);
+    I.light(-2.5, h - 0.7, 0.5, warm, 16, { fixture: 'pendant', shadow: true });
+    I.light(2.5, h - 0.7, -2, warm, 12, { fixture: 'pendant' });
+    const sofa = pick([0x3b3f46, 0x7a5d48, 0x2f4a6b], 3);
+    I.sofa(-w / 2 + 2.6, 1.4, -Math.PI / 2, sofa, 2.6);
+    I.sofa(-w / 2 + 4.3, 2.9, Math.PI, sofa, 2.0);
+    I.table(-w / 2 + 3.6, 1.4, 1.2, 0.7, 0x1d1d1f, 0.4);
+    I.box(0.4, 1.0, 2.2, std(0x1d1d1f, { roughness: 0.5 }), -w / 2 + 0.25, 0.5, 1.4, { solid: true });
+    const tvMat = new THREE.MeshStandardMaterial({ color: 0x050608, emissive: 0x6fa8ff, emissiveIntensity: 0.5, roughness: 0.2 });
+    I.box(0.06, 0.9, 1.6, tvMat, -w / 2 + 0.3, 1.5, 1.4);
+    I.animators.push((t) => { tvMat.emissive.setHSL((t * 0.04) % 1, 0.5, 0.5); });
+    // Isola e cucina lineare in acciaio
+    const steel = std(0xc9ced3, { metalness: 0.85, roughness: 0.25 });
+    I.box(4.2, 0.9, 0.65, steel, 1.0, 0.45, -d / 2 + 0.33, { solid: true, shadow: true });
+    I.box(2.2, 0.95, 1.0, std(0x2b2b2e, { roughness: 0.4 }), 1.0, 0.475, -d / 2 + 2.3, { solid: true, shadow: true });
+    I.box(2.3, 0.05, 1.1, std(0xffffff, { map: TEX.marble(rng, 1, 1), roughness: 0.15 }), 1.0, 0.975, -d / 2 + 2.3);
+    for (const x of [0.4, 1.6]) I.chair(x, -d / 2 + 3.2, Math.PI, 0x1d1d1f);
+    // Pedana con letto e libreria
+    I.box(3.6, 0.25, 3.2, std(0x5a3e2b, { roughness: 0.6 }), w / 2 - 2.0, 0.125, -d / 2 + 1.8, { solid: true });
+    houseBed(I, w / 2 - 2.0, -d / 2 + 1.7, 0x2b2b2e, pick([0x8a3b3b, 0x2f4a6b, 0xd8c8ad], 5));
+    I.box(2.6, 2.2, 0.4, std(0x5a3e2b), w / 2 - 1.5, 1.1, d / 2 - 1.2, { solid: true });
+    for (let i = 0; i < 18; i++) I.box(0.06, 0.28, 0.22, std([0xb3122a, 0x2f4a6b, 0xd6a73a, 0x2f855a][i % 4]), w / 2 - 2.6 + (i % 9) * 0.25, 0.65 + Math.floor(i / 9) * 0.6, d / 2 - 1.2);
+    I.plant(-w / 2 + 0.6, d / 2 - 0.7, 1.4);
+    I.plant(w / 2 - 0.6, -d / 2 + 3.9, 1.1);
+  } else if (variant === 'rustic') {
+    // Travi a vista, camino acceso, tavolo in legno massello, credenza
+    for (let i = -2; i <= 2; i++) I.box(0.25, 0.25, d, std(0x4a3324, { roughness: 0.8 }), i * 2.2, h - 0.15, 0);
+    I.window(w / 2 - 0.02, 1.6, -1.5, 1.2, 1.3, -Math.PI / 2, sky);
+    I.window(-w / 2 + 0.02, 1.6, 1.5, 1.2, 1.3, Math.PI / 2, sky);
+    const stone = std(0x9c968a, { roughness: 1, flatShading: true });
+    I.box(2.4, 1.4, 0.8, stone, -1.5, 0.7, -d / 2 + 0.4, { solid: true, shadow: true });
+    I.box(1.4, 0.8, 0.3, std(0x140d08, { roughness: 1 }), -1.5, 0.55, -d / 2 + 0.66);
+    I.box(2.6, 0.15, 0.95, std(0x5a3e2b), -1.5, 1.45, -d / 2 + 0.45);
+    I.box(1.0, h - 1.5, 0.6, stone, -1.5, 1.5 + (h - 1.5) / 2, -d / 2 + 0.3);
+    const fireMat = new THREE.MeshStandardMaterial({ color: 0x2a0a00, emissive: 0xff7a1a, emissiveIntensity: 1.6 });
+    const fire = I.box(0.9, 0.4, 0.15, fireMat, -1.5, 0.35, -d / 2 + 0.6);
+    fire.castShadow = false;
+    const fl = I.light(-1.5, 0.8, -d / 2 + 1.2, 0xff9a4a, 6, { fixture: 'none' });
+    I.animators.push((t) => {
+      const k = 0.75 + Math.sin(t * 9) * 0.12 + Math.sin(t * 23) * 0.08;
+      fl.intensity = 6 * k;
+      fireMat.emissiveIntensity = 1.6 * k;
+    });
+    I.light(1.5, h - 0.6, 0.5, warm, 11, { fixture: 'bulb', shadow: true });
+    I.sofa(-1.5, -d / 2 + 3.2, Math.PI, pick([0x7a5d48, 0x6b2f2f, 0x4a5a3a], 2), 2.2);
+    const rug = I.mesh(new THREE.PlaneGeometry(2.8, 1.8), std(0x8a3b3b, { roughness: 1 }), -1.5, 0.015, -d / 2 + 2.0);
+    rug.rotation.x = -Math.PI / 2;
+    I.table(2.4, 1.4, 1.8, 1.0, 0x6b4a30);
+    for (const [x, z, r] of [[1.8, 0.7, 0], [3.0, 0.7, 0], [1.8, 2.1, Math.PI], [3.0, 2.1, Math.PI]]) I.chair(x, z, r, 0x5a3e2b);
+    I.box(2.0, 1.0, 0.55, std(0x6b4a30, { roughness: 0.6 }), w / 2 - 1.2, 0.5, d / 2 - 2.4, { solid: true });
+    houseBed(I, w / 2 - 1.3, -d / 2 + 1.3, 0x6b4a30, pick([0x8d6a4f, 0x4a5a3a, 0x8a3b3b], 4));
+  } else if (variant === 'family') {
+    // Parete divisoria con passaggio: zona giorno e cameretta con due letti singoli
+    const px = 1.6;
+    I.box(0.15, h, d / 2 - 1.2, wallMat, px, h / 2, -d / 2 + (d / 2 - 1.2) / 2, { wall: true });
+    I.box(0.15, h, 1.6, wallMat, px, h / 2, d / 2 - 0.8 - 1.4, { wall: true });
+    I.window(w / 2 - 0.02, 1.6, -1.5, 1.6, 1.3, -Math.PI / 2, sky);
+    I.window(-w / 2 + 0.02, 1.6, -2, 1.6, 1.3, Math.PI / 2, sky);
+    I.light(-2.5, h - 0.6, 0, warm, 13, { fixture: 'pendant', shadow: true });
+    I.light(w / 2 - 2.2, h - 0.6, -1.5, 0xfff0d8, 9, { fixture: 'pendant' });
+    I.sofa(-w / 2 + 3.2, 1.4, -Math.PI / 2, pick([0x5e7189, 0x9a5a3a, 0x4a6b5a], 2), 2.2);
+    I.box(0.45, 0.55, 1.8, std(0x2b2522), -w / 2 + 0.3, 0.275, 1.4, { solid: true });
+    const tvMat = new THREE.MeshStandardMaterial({ color: 0x050608, emissive: 0x6fa8ff, emissiveIntensity: 0.55, roughness: 0.2 });
+    I.box(0.06, 0.75, 1.3, tvMat, -w / 2 + 0.3, 0.98, 1.4);
+    I.animators.push((t) => { tvMat.emissive.setHSL((t * 0.06) % 1, 0.5, 0.5); });
+    const counter = std(pick([0xe2e8f0, 0xd9d2c3, 0x9cc3e6], 1), { roughness: 0.35 });
+    I.box(3.4, 0.88, 0.65, counter, -w / 2 + 2.0, 0.44, -d / 2 + 0.33, { solid: true, shadow: true });
+    I.box(3.46, 0.05, 0.7, std(0x4a4540, { roughness: 0.4 }), -w / 2 + 2.0, 0.905, -d / 2 + 0.35);
+    I.table(-1.0, -1.0, 1.6, 0.9, 0x8a6a4c);
+    for (const [x, z, r] of [[-1.5, -0.25, Math.PI], [-0.5, -0.25, Math.PI], [-1.5, -1.75, 0], [-0.5, -1.75, 0]]) I.chair(x, z, r, 0x5a3e2b);
+    // Cameretta: letto dei genitori + due letti singoli colorati e giocattoli
+    houseBed(I, w / 2 - 1.3, -d / 2 + 1.3, 0x6b4a32, 0x2f4a6b);
+    for (const [x, c] of [[px + 0.9, 0xd62828], [px + 0.9, 0x3a86ff]].slice(0, 2)) {
+      const z = c === 0xd62828 ? d / 2 - 1.4 : d / 2 - 2.6;
+      I.box(1.9, 0.35, 0.9, std(0xf2f2f2, { roughness: 0.6 }), x + 0.6, 0.175, z, { solid: true });
+      I.box(1.8, 0.12, 0.85, std(c, { roughness: 1 }), x + 0.6, 0.41, z);
+    }
+    for (let i = 0; i < 5; i++) I.box(0.22, 0.22, 0.22, std([0xf77f00, 0x2a9d8f, 0xfcbf49, 0x6a4c93, 0xd62828][i], { roughness: 0.6 }), w / 2 - 0.6 - i * 0.3, 0.11, d / 2 - 0.5);
+    I.plant(-w / 2 + 0.5, d / 2 - 0.6, 1.0);
+  } else {
+    // Design: doppia altezza, pianoforte, biliardo, scala sospesa, opere d'arte
+    I.window(w / 2 - 0.02, 2.1, -1, 5.5, 3.0, -Math.PI / 2, sky);
+    I.window(-w / 2 + 0.02, 2.1, -1, 5.5, 3.0, Math.PI / 2, sky);
+    for (const [x, z] of [[-3, -2], [3, -2], [0, 2]]) I.light(x, h - 0.8, z, 0xfff6e8, 15, { fixture: 'pendant', shadow: x === 0 });
+    const sofa = pick([0xd8c8ad, 0xf2f2f2, 0x1d1d1f], 2);
+    I.sofa(-w / 2 + 3.0, 1.5, -Math.PI / 2, sofa, 3.0);
+    I.sofa(-w / 2 + 5.2, 3.4, Math.PI, sofa, 2.4);
+    I.table(-w / 2 + 4.2, 1.5, 1.4, 0.8, std(0xffffff, { map: TEX.marble(rng, 1, 1), roughness: 0.15 }), 0.4);
+    // Pianoforte a coda
+    const black = std(0x0c0c0e, { roughness: 0.15, metalness: 0.2 });
+    I.box(1.5, 0.35, 2.0, black, w / 2 - 2.2, 0.95, d / 2 - 2.4, { shadow: true });
+    I.box(1.5, 0.12, 0.25, std(0xf4f4f0), w / 2 - 2.2, 0.85, d / 2 - 3.5);
+    for (const [x, z] of [[-0.6, -0.8], [0.6, -0.8], [0, 0.8]]) I.box(0.1, 0.8, 0.1, black, w / 2 - 2.2 + x, 0.4, d / 2 - 2.4 + z);
+    I.addBody(1.5, 1.2, 2.0, w / 2 - 2.2, 0.6, d / 2 - 2.4);
+    // Tavolo da biliardo
+    I.box(2.6, 0.75, 1.4, std(0x3a2416, { roughness: 0.5 }), 1.0, 0.375, -0.6, { solid: true, shadow: true });
+    I.box(2.4, 0.04, 1.2, std(0x1f6b3a, { roughness: 1 }), 1.0, 0.77, -0.6);
+    // Quadri luminosi
+    for (const [x, c] of [[-2.5, 0xd6a73a], [0.5, 0x2f6fb0], [3.5, 0xb3122a]]) {
+      I.box(1.6, 1.1, 0.04, std(c, { roughness: 0.4 }), x, 2.4, -d / 2 + 0.03);
+      I.box(1.7, 1.2, 0.03, std(0x111111), x, 2.4, -d / 2 + 0.015);
+    }
+    const kitchen = std(0xf4f2ee, { roughness: 0.3 });
+    I.box(4.0, 0.9, 0.65, kitchen, -w / 2 + 2.3, 0.45, -d / 2 + 0.33, { solid: true, shadow: true });
+    I.box(4.06, 0.05, 0.7, std(0x111111, { roughness: 0.15 }), -w / 2 + 2.3, 0.925, -d / 2 + 0.35);
+    houseBed(I, w / 2 - 1.4, -d / 2 + 1.4, 0x1d1d1f, pick([0xd8c8ad, 0x2f4a6b], 6));
+    I.plant(-w / 2 + 0.6, d / 2 - 0.6, 1.5);
+    I.plant(w / 2 - 0.6, -d / 2 + 3.2, 1.3);
+  }
+  // Calendario e punto [E] in tutte le varianti
+  I.calendar(-w / 2 + 0.03, 1.65, -d / 2 + 1.6, Math.PI / 2);
+  I.interact(-w / 2 + 1.0, -d / 2 + 1.6, 'guardare il calendario', 'calendar', {}, 1.2);
+  return { w, d, h };
+}
 
 /** Ristorante/pizzeria: tavoli con sedie (posti a sedere interattivi), cucina e decorazioni. */
 function buildDiner(I, ctx, kind) {

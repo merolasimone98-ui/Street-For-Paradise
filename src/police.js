@@ -9,12 +9,15 @@ import { HALF, CELL, RINGS, GRID } from './world.js';
 import { audio } from './audio.js';
 
 const MAX_STARS = 3;
-const VIEW_DIST = 110;
-const VIEW_HALF_ANGLE = THREE.MathUtils.degToRad(70);
-const NEAR_SENSE = 14; // da vicino ti "sentono" anche alle spalle
-const BLINK_AFTER = 7; // secondi fuori vista prima che le stelle lampeggino
-const LOSE_AFTER = 16; // secondi fuori vista per far perdere le tracce
-const DIRECT_CHASE = 45; // sotto questa distanza (e in vista) puntano dritto al giocatore
+// Polizia più impegnativa: vedono più lontano e più di lato, ti sentono da più vicino,
+// cercano più a lungo e sono più numerose e più veloci (vedi spawnCar).
+const VIEW_DIST = 155;
+const VIEW_HALF_ANGLE = THREE.MathUtils.degToRad(85);
+const NEAR_SENSE = 24; // da vicino ti "sentono" anche alle spalle
+const BLINK_AFTER = 12; // secondi fuori vista prima che le stelle lampeggino
+const LOSE_AFTER = 30; // secondi fuori vista per far perdere le tracce
+const DIRECT_CHASE = 60; // sotto questa distanza (e in vista) puntano dritto al giocatore
+const RADIO_UPDATE = 9; // con 3 stelle la centrale ritrasmette la tua posizione ogni tot secondi
 const ARREST_DIST = 6.5;
 const MIN_LINE = -RINGS, MAX_LINE = GRID + RINGS;
 
@@ -72,10 +75,12 @@ export class PoliceManager {
     this.unseen = 0;
     this.lastKnown = this.game.mapPosition();
     if (this.stars > was) {
-      if (!was) this.spawnTimer = 3; // il tempo della chiamata al 112
+      if (!was) this.spawnTimer = 2; // il tempo della chiamata al 112
       this.game.toast(`🚨 ${reason} — qualcuno ha chiamato la polizia! ${'★'.repeat(this.stars)}`, 3600);
       audio.siren(6);
     }
+    // I passanti vicini al crimine scappano spaventati
+    if (!this.game.interior && this.game.npcs) this.game.npcs.panic(this.lastKnown.x, this.lastKnown.z, 30 + this.stars * 10);
   }
 
   /** Il giocatore è stato fermato: tutte le pattuglie rientrano. */
@@ -97,6 +102,10 @@ export class PoliceManager {
     let x = g.x;
     for (let i = 0; i < 4 && this.cars.some((c) => Math.hypot(c.body.position.x - x, c.body.position.z - g.z) < 6); i++) x -= 7;
     const car = new Vehicle(this.game.scene, this.game.physics, { model: 'polizia', police: true, owner: 'police', x, z: g.z, heading: g.heading });
+    // Volanti potenziate: più veloci e scattanti delle auto civili
+    car.spec.maxSpeed *= 1.3;
+    car.spec.accel *= 1.35;
+    car.spec.steer *= 1.12;
     car.makeDynamic();
     car.sirenOn = true;
     car.wp = null;
@@ -173,12 +182,18 @@ export class PoliceManager {
     const tgt = { x: target.x, y: g.driving ? g.driving.body.position.y : g.player.feet.y, z: target.z };
 
     if (this.stars) {
-      // Pattuglie in arrivo dal garage della centrale (una per stella)
+      // Pattuglie in arrivo dal garage della centrale (una per stella più una di rinforzo)
       this.spawnTimer -= dt;
       const active = this.cars.filter((c) => !c.leaving).length;
-      if (active < this.stars && this.spawnTimer <= 0) {
+      if (active < this.stars + 1 && this.spawnTimer <= 0) {
         this.spawnCar();
-        this.spawnTimer = 2.5;
+        this.spawnTimer = 1.8;
+      }
+      // Con 2-3 stelle la centrale aggiorna via radio la tua ultima posizione nota
+      this.radioT = (this.radioT || 0) - dt;
+      if (this.stars >= 2 && this.radioT <= 0) {
+        this.radioT = this.stars >= 3 ? RADIO_UPDATE : RADIO_UPDATE * 1.6;
+        if (this.unseen < LOSE_AFTER * 0.6) this.lastKnown = { x: tgt.x, z: tgt.z };
       }
       let seen = false;
       for (const c of this.cars) if (!c.leaving && this.canSee(c, tgt)) { seen = true; break; }

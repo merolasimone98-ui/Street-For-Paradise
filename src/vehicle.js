@@ -19,6 +19,14 @@ export const SPECS = {
 
 export const KIND_LABEL = { bike: 'bici', scooter: 'motorino', moto: 'moto', car_small: 'auto', car: 'auto', suv: 'auto', sport: 'auto' };
 
+/** Marce per tipo di veicolo (0 = senza cambio: bici e motorini a variatore). */
+export const GEARS = { bike: 0, scooter: 0, moto: 6, car_small: 5, car: 5, suv: 5, sport: 6 };
+/** Velocità massima di ogni marcia come frazione della velocità massima del mezzo. */
+const gearTop = (gear, n) => (n ? Math.pow(gear / n, 0.85) : 1);
+
+/** Modifiche dell'officina di casa (garage): estetiche e meccaniche. */
+export const DEFAULT_TUNE = { rims: null, lowered: false, engine: 0, brakes: false, neon: null, tint: false };
+
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0, ...o });
 
 function tube(parent, a, b, r, material) {
@@ -52,11 +60,15 @@ function wheel(r, width, kind) {
   const g = new THREE.Group();
   const tire = new THREE.Mesh(new THREE.CylinderGeometry(r, r, width, 22), std(0x141414, { roughness: 0.9 }));
   tire.rotation.z = Math.PI / 2;
-  const rim = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.62, r * 0.62, width + 0.01, 14), std(kind === 'sport' ? 0x2b2b2e : 0xc4c8cc, { metalness: 0.9, roughness: 0.28 }));
+  const rimMat = std(kind === 'sport' ? 0x2b2b2e : 0xc4c8cc, { metalness: 0.9, roughness: 0.28 });
+  rimMat.userData.rim = true; // tuning: colore dei cerchi
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.62, r * 0.62, width + 0.01, 14), rimMat);
   rim.rotation.z = Math.PI / 2;
   g.add(tire, rim);
+  const spokeMat = std(0x9aa0a6, { metalness: 0.9, roughness: 0.3 });
+  spokeMat.userData.rim = true;
   for (let i = 0; i < 5; i++) {
-    const sp = new THREE.Mesh(new THREE.BoxGeometry(width + 0.02, 0.035, r * 1.1), std(0x9aa0a6, { metalness: 0.9, roughness: 0.3 }));
+    const sp = new THREE.Mesh(new THREE.BoxGeometry(width + 0.02, 0.035, r * 1.1), spokeMat);
     sp.rotation.x = (i / 5) * Math.PI;
     g.add(sp);
   }
@@ -69,11 +81,15 @@ function twoWheel(r, tubeR) {
   const tire = new THREE.Mesh(new THREE.TorusGeometry(r, tubeR, 10, 30), std(0x151515, { roughness: 0.9 }));
   tire.rotation.y = Math.PI / 2;
   g.add(tire);
-  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.1, 10), std(0xbfc4c9, { metalness: 0.9, roughness: 0.3 }));
+  const hubMat = std(0xbfc4c9, { metalness: 0.9, roughness: 0.3 });
+  hubMat.userData.rim = true;
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.1, 10), hubMat);
   hub.rotation.z = Math.PI / 2;
   g.add(hub);
+  const spokeMat = std(0xc9ced3, { metalness: 0.9 });
+  spokeMat.userData.rim = true;
   for (let i = 0; i < 8; i++) {
-    const sp = new THREE.Mesh(new THREE.BoxGeometry(0.008, r * 2 - tubeR, 0.008), std(0xc9ced3, { metalness: 0.9 }));
+    const sp = new THREE.Mesh(new THREE.BoxGeometry(0.008, r * 2 - tubeR, 0.008), spokeMat);
     sp.rotation.x = (i / 8) * Math.PI;
     g.add(sp);
   }
@@ -81,19 +97,204 @@ function twoWheel(r, tubeR) {
   return g;
 }
 
-/** Costruisce il modello 3D. Ritorna { group, wheels: [{ node, front }], steerNodes: [] } */
-export function buildVehicleMesh(kind, color) {
+/** Testo della radio sul display del cruscotto. */
+function radioCanvas(text) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#04131a'; g.fillRect(0, 0, 256, 64);
+  g.fillStyle = '#5fe3ff'; g.font = '600 26px Oswald, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, 128, 34);
+  return c;
+}
+
+/**
+ * Abitacolo per la prima persona: cruscotto, volante (ruota con lo sterzo), contachilometri con lancetta,
+ * display della radio, sedili, cielo e pannelli porta. Coordinate locali dell'auto (muso verso +Z, guida a sinistra = +X).
+ */
+function buildCockpit(L, W, k, gFront, gRear, roofY) {
+  const g = new THREE.Group();
+  g.name = 'cockpit';
+  const dashMat = std(0x1b1c1f, { roughness: 0.65 });
+  const trim = std(0x2c2e33, { roughness: 0.5, metalness: 0.2 });
+  const seatMat = std(0x232428, { roughness: 0.9 });
+  const driverX = W / 2 - 0.5;
+  const dashZ = gFront - 0.32;
+  const dashY = 0.97 * k;
+  const dash = new THREE.Mesh(new THREE.BoxGeometry(W - 0.22, 0.3, 0.6), dashMat);
+  dash.position.set(0, dashY, dashZ);
+  const hood = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.22), dashMat);
+  hood.position.set(driverX, dashY + 0.14, dashZ - 0.12);
+  g.add(dash, hood);
+  // Quadro strumenti con lancetta del tachimetro
+  const dialMat = new THREE.MeshStandardMaterial({ color: 0x0b0d10, emissive: 0x2a4a66, emissiveIntensity: 0.6, roughness: 0.4 });
+  const dial = new THREE.Mesh(new THREE.CircleGeometry(0.075, 24), dialMat);
+  dial.position.set(driverX, dashY + 0.12, dashZ - 0.235);
+  dial.rotation.y = Math.PI;
+  const needlePivot = new THREE.Group();
+  needlePivot.position.copy(dial.position).add(new THREE.Vector3(0, 0, -0.004));
+  needlePivot.rotation.y = Math.PI;
+  const needle = new THREE.Mesh(new THREE.BoxGeometry(0.006, 0.065, 0.003), new THREE.MeshBasicMaterial({ color: 0xff5a3a }));
+  needle.position.y = 0.03;
+  needlePivot.add(needle);
+  g.add(dial, needlePivot);
+  // Display della radio al centro
+  const radioTex = new THREE.CanvasTexture(radioCanvas('RADIO OFF'));
+  radioTex.colorSpace = THREE.SRGBColorSpace;
+  const radio = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.055), new THREE.MeshBasicMaterial({ map: radioTex, toneMapped: false }));
+  radio.position.set(0, dashY + 0.02, dashZ - 0.28);
+  radio.rotation.y = Math.PI;
+  radio.rotation.x = 0.25;
+  g.add(radio);
+  // Volante (corona, razze, piantone) che gira con lo sterzo
+  const wheelPivot = new THREE.Group();
+  wheelPivot.position.set(driverX, dashY + 0.02, dashZ - 0.42);
+  wheelPivot.rotation.x = -0.42;
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.018, 10, 32), trim);
+  const spin = new THREE.Group();
+  spin.add(ring);
+  for (const a of [0, Math.PI * 0.75, Math.PI * 1.25]) {
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.15, 0.012), trim);
+    spoke.position.set(Math.sin(a) * 0.075, Math.cos(a) * -0.075, 0);
+    spoke.rotation.z = -a;
+    spin.add(spoke);
+  }
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.03, 16), dashMat);
+  hub.rotation.x = Math.PI / 2;
+  spin.add(hub);
+  wheelPivot.add(spin);
+  const column = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.3, 10), dashMat);
+  column.rotation.x = Math.PI / 2;
+  column.position.z = 0.15;
+  wheelPivot.add(column);
+  g.add(wheelPivot);
+  // Sedili, tunnel centrale con leva del cambio
+  for (const sx of [driverX, -driverX]) {
+    const base = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.52), seatMat);
+    base.position.set(sx, 0.5 * k, dashZ - 1.2);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.62, 0.12), seatMat);
+    back.position.set(sx, 0.85 * k, dashZ - 1.5);
+    back.rotation.x = -0.18;
+    g.add(base, back);
+  }
+  const tunnel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.9), dashMat);
+  tunnel.position.set(0, 0.5 * k, dashZ - 0.8);
+  const lever = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 8), trim);
+  lever.position.set(0, 0.67 * k, dashZ - 0.75);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.025, 10, 8), trim);
+  knob.position.set(0, 0.75 * k, dashZ - 0.75);
+  g.add(tunnel, lever, knob);
+  // Cielo dell'abitacolo e pannelli interni delle porte (visibili solo dall'interno)
+  const liner = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.32, Math.max(0.6, gFront - gRear)), std(0x9a968e, { roughness: 1, side: THREE.DoubleSide }));
+  liner.rotation.x = Math.PI / 2;
+  liner.position.set(0, roofY - 0.07, (gFront + gRear) / 2);
+  g.add(liner);
+  for (const sx of [-1, 1]) {
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(0.6, gFront - gRear + 0.4), 0.5 * k), std(0x2a2b30, { roughness: 0.85, side: THREE.DoubleSide }));
+    panel.rotation.y = Math.PI / 2;
+    panel.position.set(sx * (W / 2 - 0.1), 0.68 * k, (gFront + gRear) / 2);
+    g.add(panel);
+  }
+  const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.02), new THREE.MeshStandardMaterial({ color: 0x9fb0bf, metalness: 0.9, roughness: 0.05 }));
+  mirror.position.set(0, roofY - 0.16, gFront - 0.35);
+  g.add(mirror);
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = true; } });
+  g.visible = false;
+  return {
+    group: g, wheel: spin, needle: needlePivot, radioTex, radioCanvasText: 'RADIO OFF',
+    eye: new THREE.Vector3(driverX, 1.2 * k, dashZ - 0.98),
+  };
+}
+
+/** Vespa: scocca a "goccia" con cofani laterali, scudo, faro tondo sul manubrio e parafango anteriore. */
+function buildVespa(group, s, paint, black, chrome, headMat, tailMat, wheels, steerNodes) {
+  const r = s.wheelR;
+  const fw = twoWheel(r, 0.07);
+  const rw = twoWheel(r, 0.08);
+  const fHolder = new THREE.Group();
+  fHolder.position.set(0, r, s.wheelBase / 2);
+  fHolder.add(fw);
+  rw.position.set(0, r, -s.wheelBase / 2);
+  group.add(fHolder, rw);
+  wheels.push({ node: fw, front: true }, { node: rw, front: false });
+  steerNodes.push(fHolder);
+  const parts = [];
+  // Pedana e scudo anteriore curvo
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.06, 0.55), paint);
+  floor.position.set(0, 0.3, 0.08);
+  const shield = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.26, 0.78, 20, 1, true, -Math.PI * 0.45, Math.PI * 0.9), paint);
+  shield.material = paint;
+  shield.position.set(0, 0.68, 0.3);
+  shield.rotation.x = -0.18;
+  // Scocca posteriore con i due cofani laterali bombati
+  const body = new THREE.Mesh(new THREE.SphereGeometry(0.3, 20, 14), paint);
+  body.scale.set(0.95, 0.7, 1.45);
+  body.position.set(0, 0.52, -0.38);
+  for (const sx of [-1, 1]) {
+    const cowl = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), paint);
+    cowl.scale.set(0.7, 0.8, 1.5);
+    cowl.position.set(sx * 0.17, 0.46, -0.42);
+    parts.push(cowl);
+  }
+  // Parafango anteriore sopra la ruota (gira con lo sterzo)
+  const fender = new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), paint);
+  fender.scale.set(0.7, 0.6, 1.2);
+  fender.position.set(0, 0.07, 0);
+  fHolder.add(fender);
+  // Sella lunga biposto e portapacchi cromato
+  const seat = new THREE.Mesh(new THREE.CapsuleGeometry(0.13, 0.5, 6, 12), black);
+  seat.rotation.x = Math.PI / 2;
+  seat.scale.set(1, 1, 0.55);
+  seat.position.set(0, 0.79, -0.32);
+  const rack = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.02, 0.22), chrome);
+  rack.position.set(0, 0.76, -0.75);
+  parts.push(floor, shield, body, seat, rack);
+  parts.forEach((m) => { m.castShadow = true; group.add(m); });
+  // Sterzo: piantone, manubrio con faro tondo (gira con il manubrio, come sulle Vespa vere)
+  const col = new THREE.Group();
+  fHolder.add(col);
+  tube(col, new THREE.Vector3(0, 0.05, -0.02), new THREE.Vector3(0, 0.78, -0.16), 0.032, paint);
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.07, 0.09), paint);
+  bar.position.set(0, 0.8, -0.17);
+  col.add(bar);
+  const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 20), headMat);
+  lamp.rotation.x = Math.PI / 2;
+  lamp.position.set(0, 0.8, -0.1);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.072, 0.01, 8, 20), chrome);
+  rim.position.set(0, 0.8, -0.075);
+  col.add(lamp, rim);
+  for (const sx of [-0.27, 0.27]) {
+    const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.1, 10), black);
+    grip.rotation.z = Math.PI / 2;
+    grip.position.set(sx, 0.8, -0.17);
+    col.add(grip);
+  }
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.03), tailMat);
+  tl.position.set(0, 0.62, -0.83);
+  group.add(tl);
+}
+
+/**
+ * Costruisce il modello 3D.
+ * Ritorna { group, wheels: [{ node, front }], steerNodes: [], lights: { head, tail }, crank, cockpit }
+ */
+export function buildVehicleMesh(kind, color, style = null) {
   const s = SPECS[kind];
   const group = new THREE.Group();
   const wheels = [];
   const steerNodes = [];
+  let crank = null;
+  let cockpit = null;
   // Vernice a due strati: base metallizzata + trasparente lucido (clearcoat) che riflette cielo e città
   const paint = new THREE.MeshPhysicalMaterial({ color, metalness: 0.45, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.25 });
   const black = std(0x16171a, { roughness: 0.5 });
   const chrome = std(0xd0d4d8, { metalness: 0.95, roughness: 0.2 });
   const glass = new THREE.MeshPhysicalMaterial({ color: 0x141d28, metalness: 0, roughness: 0.02, ior: 1.5, clearcoat: 1, clearcoatRoughness: 0, envMapIntensity: 1.6, transparent: true, opacity: 0.86 });
-  const headMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2d6, emissiveIntensity: 1.3 });
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff1a1a, emissiveIntensity: 0.9 });
+  paint.userData.paint = true; // tuning: colore della carrozzeria
+  glass.userData.glass = true; // tuning: vetri oscurati
+  // Fari e fanali: sempre visibili (lente bianca / rossa); si "accendono" alzando l'emissione (vedi Vehicle.setLights)
+  const headMat = new THREE.MeshStandardMaterial({ color: 0xeef2f6, emissive: 0xfff2d6, emissiveIntensity: 0.05, roughness: 0.08, metalness: 0.2 });
+  const tailMat = new THREE.MeshStandardMaterial({ color: 0x5a0606, emissive: 0xff1a1a, emissiveIntensity: 0.06, roughness: 0.15 });
 
   if (!s.ride) {
     const L = s.len, W = s.wid, k = s.h / 1.45;
@@ -119,6 +320,7 @@ export function buildVehicleMesh(kind, color) {
     roof.position.set(0, roofY - 0.01, (gRear + (kind === 'suv' ? 0.15 : 0.5) + gFront - (kind === 'sport' ? 0.85 : 0.6)) / 2);
     roof.castShadow = true;
     group.add(roof);
+    cockpit = buildCockpit(L, W, k, gFront, gRear, roofY);
     // Paraurti, griglia, luci, targa, specchietti
     for (const z of [front + 0.04, rear - 0.04]) {
       const bump = new THREE.Mesh(new THREE.BoxGeometry(W - 0.02, 0.16, 0.12), black);
@@ -126,13 +328,14 @@ export function buildVehicleMesh(kind, color) {
       group.add(bump);
     }
     const grille = new THREE.Mesh(new THREE.BoxGeometry(W * 0.45, 0.14, 0.02), black);
-    grille.position.set(0, 0.55 * k, front + 0.03);
+    grille.position.set(0, 0.55 * k, front + 0.07);
     group.add(grille);
     for (const sx of [-1, 1]) {
       const hl = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.04), headMat);
-      hl.position.set(sx * (W / 2 - 0.3), 0.62 * k, front + 0.02);
+      // Oltre lo smusso della carrozzeria (bevel 6 cm), così fari e fanali sono sempre visibili
+      hl.position.set(sx * (W / 2 - 0.3), 0.62 * k, front + 0.075);
       const tl = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.1, 0.04), tailMat);
-      tl.position.set(sx * (W / 2 - 0.28), 0.7 * k, rear - 0.02);
+      tl.position.set(sx * (W / 2 - 0.28), 0.7 * k, rear - 0.075);
       const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.09, 0.07), paint);
       mirror.position.set(sx * (W / 2 + 0.04), 0.98 * k, gFront - 0.15);
       group.add(hl, tl, mirror);
@@ -195,6 +398,8 @@ export function buildVehicleMesh(kind, color) {
     const tl = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.03), tailMat);
     tl.position.set(0, 0.84, -0.92);
     group.add(tl);
+  } else if (kind === 'scooter' && style === 'vespa') {
+    buildVespa(group, s, paint, black, chrome, headMat, tailMat, wheels, steerNodes);
   } else if (kind === 'scooter') {
     const r = s.wheelR;
     const fw = twoWheel(r, 0.07);
@@ -241,6 +446,7 @@ export function buildVehicleMesh(kind, color) {
     wheels.push({ node: fw, front: true }, { node: rw, front: false });
     steerNodes.push(fHolder);
     const frame = new THREE.MeshPhysicalMaterial({ color, metalness: 0.6, roughness: 0.3, clearcoat: 1 });
+    frame.userData.paint = true;
     const bb = new THREE.Vector3(0, r, 0.0);
     const seatTop = new THREE.Vector3(0, 0.88, -0.22);
     const head = new THREE.Vector3(0, 0.86, 0.38);
@@ -257,13 +463,33 @@ export function buildVehicleMesh(kind, color) {
     fHolder.add(fork);
     tube(fork, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0.6, -0.12), 0.016, chrome);
     tube(fork, new THREE.Vector3(-0.28, 0.66, -0.15), new THREE.Vector3(0.28, 0.66, -0.15), 0.014, black);
-    const crank = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.02, 16), chrome);
-    crank.rotation.z = Math.PI / 2;
+    // Guarnitura che gira con la pedalata: corona, pedivelle opposte e pedali
+    crank = new THREE.Group();
     crank.position.copy(bb);
+    const ringGear = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.02, 16), chrome);
+    ringGear.rotation.z = Math.PI / 2;
+    ringGear.position.x = 0.04;
+    crank.add(ringGear);
+    for (const side of [1, -1]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.17, 0.03), chrome);
+      arm.position.set(side * 0.07, -side * 0.085, 0);
+      const pedal = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.02, 0.06), black);
+      pedal.position.set(side * 0.12, -side * 0.17, 0);
+      crank.add(arm, pedal);
+    }
     group.add(crank);
+    // Fanalino anteriore sul manubrio e catarifrangente/luce posteriore sotto la sella
+    const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.05, 12), headMat);
+    lamp.rotation.x = Math.PI / 2;
+    lamp.position.set(0, 0.6, -0.05);
+    fork.add(lamp);
+    const rear = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.02), tailMat);
+    rear.position.set(0, 0.8, -0.38);
+    group.add(rear);
   }
   group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-  return { group, wheels, steerNodes };
+  if (cockpit) group.add(cockpit.group);
+  return { group, wheels, steerNodes, lights: { head: headMat, tail: tailMat }, crank, cockpit };
 }
 
 let UID = 1;
@@ -279,14 +505,28 @@ export class Vehicle {
     const def = VEHICLE_MODELS[o.model] || VEHICLE_MODELS.berlina;
     this.name = def.name;
     this.kind = def.kind;
-    this.spec = SPECS[this.kind];
+    // Copia per veicolo (con le eventuali caratteristiche del modello, es. Vespa 50): il tuning modifica solo questo mezzo
+    this.def = def;
+    this.baseSpec = { ...SPECS[this.kind], ...(def.spec || {}) };
+    this.spec = { ...this.baseSpec };
     this.color = o.color ?? def.colors[0];
     this.owner = o.owner || 'npc';
     this.uid = o.uid || `v${Date.now().toString(36)}${(UID++).toString(36)}`;
-    const built = buildVehicleMesh(this.kind, this.color);
+    const built = buildVehicleMesh(this.kind, this.color, def.style || null);
     this.mesh = built.group;
     this.wheels = built.wheels;
     this.steerNodes = built.steerNodes;
+    this.lightMats = built.lights;
+    this.crank = built.crank;
+    this.cockpit = built.cockpit;
+    this.lightLevel = -1;
+    this.pedalPhase = 0;
+    this.stoppie = 0;
+    this.wheelieVel = 0;
+    this.stoppieVel = 0;
+    this.crash = null; // 'wheelie' | 'stoppie' quando il mezzo si ribalta
+    this.fallen = false; // moto/motorino a terra dopo una caduta
+    this.setLights(0, false);
     // Modello .glb opzionale (assets/models/manifest.json): sostituisce la carrozzeria procedurale
     this.glb = models.createVehicle(this.model, this.kind, this.spec, this.color);
     if (this.glb) {
@@ -352,6 +592,199 @@ export class Vehicle {
     this.lean = 0;
     this.isStatic = false;
     this.settle = 0; // tempo per appoggiarsi al suolo prima di diventare statico
+    // Cambio: automatico o manuale (impostazione), marcia e regime (0..1) per HUD e suono del motore
+    this.gear = 1;
+    this.rpm = 0;
+    this.manual = false;
+    // Garage di casa: il veicolo è custodito al chiuso (fuori dalla fisica finché non entri nel garage)
+    this.inGarage = false;
+    this.bay = Number.isInteger(o.bay) ? o.bay : -1;
+    this.bayActive = false;
+    this.bodyInWorld = true;
+    this.tune = { ...DEFAULT_TUNE, ...(o.tune || {}) };
+    this.dropApplied = 0;
+    this.applyTune();
+    if (o.inGarage) this.stash();
+  }
+
+  get gears() {
+    return this.def.gears ?? (GEARS[this.kind] || 0);
+  }
+
+  /** Moto e motorini (impennata con equilibrio, stoppie, cadute). */
+  get motorTwoWheel() {
+    return this.kind === 'moto' || this.kind === 'scooter';
+  }
+
+  /**
+   * Fari e fanali. level: 0 spenti (lenti visibili), 1 anabbaglianti, 2 abbaglianti; brake: luci di stop.
+   * Cambia solo l'emissione dei materiali: nessuna luce aggiunta o tolta dalla scena.
+   */
+  setLights(level, brake = false) {
+    const key = level * 2 + (brake ? 1 : 0);
+    if (key === this.lightLevel || !this.lightMats) return;
+    this.lightLevel = key;
+    this.lightMats.head.emissiveIntensity = [0.05, 2.0, 4.2][level] || 0.05;
+    this.lightMats.tail.emissiveIntensity = brake ? 3.2 : level > 0 ? 1.1 : 0.06;
+  }
+
+  /** Display della radio nell'abitacolo. */
+  setRadioText(text) {
+    const c = this.cockpit;
+    if (!c || c.radioCanvasText === text) return;
+    c.radioCanvasText = text;
+    const canvas = c.radioTex.image;
+    const g = canvas.getContext('2d');
+    const src = radioCanvas(text);
+    g.clearRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(src, 0, 0);
+    c.radioTex.needsUpdate = true;
+  }
+
+  /** Volante e tachimetro dell'abitacolo (prima persona). */
+  updateCockpit(visible) {
+    const c = this.cockpit;
+    if (!c) return;
+    c.group.visible = visible;
+    if (!visible) return;
+    c.wheel.rotation.z = -this.steer * 2.4;
+    c.needle.rotation.z = Math.PI * 0.75 - Math.min(1, Math.abs(this.speed) / 70) * Math.PI * 1.5;
+  }
+
+  /** Traffico: corpo cinematico mosso dal gestore del traffico (spinge il giocatore, non viene spinto). */
+  setKinematic() {
+    const b = this.body;
+    b.type = CANNON.Body.KINEMATIC;
+    b.mass = 0;
+    b.updateMassProperties();
+    b.velocity.set(0, 0, 0);
+    b.angularVelocity.set(0, 0, 0);
+    this.isStatic = false;
+    this.kinematic = true;
+  }
+
+  /** Etichetta della marcia per il tachimetro ('' se il mezzo non ha il cambio). */
+  get gearLabel() {
+    if (!this.gears) return '';
+    if (this.speed < -0.3) return 'R';
+    return String(this.gear);
+  }
+
+  /** Applica tuning: vernice, cerchi, vetri, assetto, neon, motore e freni. */
+  applyTune() {
+    const t = this.tune;
+    const base = this.baseSpec;
+    const eng = Math.max(0, Math.min(2, t.engine || 0));
+    this.spec.maxSpeed = base.maxSpeed * [1, 1.08, 1.17][eng];
+    this.spec.accel = base.accel * [1, 1.14, 1.3][eng];
+    this.spec.brake = base.brake * (t.brakes ? 1.22 : 1);
+    this.spec.steer = base.steer * (t.lowered ? 1.08 : 1);
+    this.mesh.traverse((o) => {
+      if (!o.isMesh) return;
+      for (const m of [].concat(o.material)) {
+        if (!m || !m.userData || m.userData.sharedAsset) continue;
+        if (m.userData.paint) m.color.setHex(this.color);
+        if (m.userData.rim) {
+          if (m.userData.baseColor === undefined) m.userData.baseColor = m.color.getHex();
+          m.color.setHex(t.rims ?? m.userData.baseColor);
+        }
+        if (m.userData.glass) {
+          m.color.setHex(t.tint ? 0x05070a : 0x141d28);
+          m.opacity = t.tint ? 0.96 : 0.86;
+        }
+      }
+    });
+    // Assetto ribassato: la carrozzeria scende di 4,5 cm (le ruote restano sul corpo fisico)
+    const drop = t.lowered && !this.spec.ride ? 0.045 : 0;
+    if (drop !== this.dropApplied && this.deformables) {
+      for (const d of this.deformables) {
+        d.pos.y -= (drop - this.dropApplied) * d.k;
+        d.m.position.copy(d.pos).addScaledVector(d.off, d.k);
+      }
+      this.dropApplied = drop;
+    }
+    // Neon sottoscocca (solo auto): una superficie luminosa, nessuna luce aggiunta alla scena
+    if (t.neon != null && !this.spec.ride) {
+      if (!this.neonMesh) {
+        const geo = new THREE.PlaneGeometry(this.spec.wid + 0.5, this.spec.len * 0.95);
+        geo.rotateX(-Math.PI / 2);
+        this.neonMesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: t.neon, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+        this.neonMesh.position.y = 0.05;
+        this.neonMesh.renderOrder = 3;
+        this.mesh.add(this.neonMesh);
+      }
+      this.neonMesh.material.color.setHex(t.neon);
+      this.neonMesh.visible = true;
+    } else if (this.neonMesh) {
+      this.neonMesh.visible = false;
+    }
+  }
+
+  /** Custodito in garage: niente corpo fisico né mesh in città. */
+  stash() {
+    this.inGarage = true;
+    this.bayActive = false;
+    this.occupied = false;
+    this.speed = 0;
+    if (this.bodyInWorld) {
+      this.physics.removeBody(this.body);
+      this.bodyInWorld = false;
+    }
+    this.body.velocity.set(0, 0, 0);
+    this.body.angularVelocity.set(0, 0, 0);
+    this.body.position.set(-9000, -50, -9000);
+    this.mesh.visible = false;
+  }
+
+  /** Posteggiato in un box del garage (coordinate mondo dell'interno). */
+  placeInBay(x, z, heading) {
+    this.inGarage = true;
+    this.bayActive = true;
+    this.speed = 0;
+    this.body.velocity.set(0, 0, 0);
+    this.body.angularVelocity.set(0, 0, 0);
+    this.body.position.set(x, 0, z); // ruote appoggiate al pavimento del box (statico subito)
+    this.body.quaternion.setFromEuler(0, heading, 0);
+    this.body.previousPosition.copy(this.body.position);
+    this.body.interpolatedPosition.copy(this.body.position);
+    this.body.interpolatedQuaternion.copy(this.body.quaternion);
+    if (!this.bodyInWorld) {
+      this.physics.addBody(this.body);
+      this.bodyInWorld = true;
+    }
+    this.isStatic = false;
+    this.makeStatic();
+    this.mesh.visible = true;
+  }
+
+  /** Esce dal garage: torna un veicolo normale in città (il corpo resta nella fisica). */
+  leaveGarage() {
+    this.inGarage = false;
+    this.bayActive = false;
+    this.bay = -1;
+    if (!this.bodyInWorld) {
+      this.physics.addBody(this.body);
+      this.bodyInWorld = true;
+    }
+    this.mesh.visible = true;
+  }
+
+  /** Sposta il veicolo (fermo) in un punto della mappa. */
+  teleport(x, z, heading, speed = 0) {
+    const b = this.body;
+    b.position.set(x, 0.25, z);
+    b.quaternion.setFromEuler(0, heading, 0);
+    b.velocity.set(Math.sin(heading) * speed, 0, Math.cos(heading) * speed);
+    b.angularVelocity.set(0, 0, 0);
+    b.previousPosition.copy(b.position);
+    b.interpolatedPosition.copy(b.position);
+    b.interpolatedQuaternion.copy(b.quaternion);
+    this.speed = speed;
+  }
+
+  /** Il veicolo partecipa alla simulazione (non è custodito fuori scena). */
+  get active() {
+    return !this.inGarage || this.bayActive;
   }
 
   /** Volante della polizia: bande blu, scritta POLIZIA e lampeggianti sul tetto. */
@@ -529,13 +962,60 @@ export class Vehicle {
 
     if (ctl) {
       // Impennata (Shift) su moto, motorini e bici: si alza la ruota anteriore
-      const wantWheelie = s.ride && ctl.wheelie && speed > 2.5 && !this.broken;
-      this.wheelie += ((wantWheelie ? (this.kind === 'moto' ? 0.62 : 0.45) : 0) - this.wheelie) * Math.min(1, dt * (wantWheelie ? 2.6 : 4.5));
-      const steerIn = ctl.steer * (1 - Math.min(0.7, this.wheelie));
-      this.steer += (steerIn - this.steer) * Math.min(1, dt * 6);
+      if (this.motorTwoWheel) {
+        // Impennata con equilibrio: tenendo SHIFT + gas il muso sale sempre più in fretta (instabile).
+        // Va dosata a colpi di SHIFT: oltre l'angolo limite il mezzo si ribalta all'indietro ("ti schieni").
+        const push = ctl.wheelie && ctl.throttle && speed > 3 && !this.broken && this.stoppie < 0.02;
+        if (push) this.wheelieVel += (1.25 + this.wheelie * 2.4) * dt * (this.kind === 'moto' ? 1.15 : 1);
+        else if (this.wheelie > 0) this.wheelieVel -= (1.9 + this.wheelie * 1.4) * dt; // la ruota torna giù gradualmente
+        if (ctl.brake && this.wheelie > 0) this.wheelieVel -= 3.5 * dt; // freno posteriore: muso giù
+        this.wheelieVel *= 1 - Math.min(1, dt * 1.6);
+        this.wheelie += this.wheelieVel * dt;
+        if (this.wheelie <= 0) { this.wheelie = 0; this.wheelieVel = Math.max(0, this.wheelieVel); }
+        if (this.wheelie > (this.kind === 'moto' ? 1.12 : 0.98)) this.crash = 'wheelie';
+        // Stoppie: CTRL + freno a velocità sostenuta solleva la ruota posteriore (anche qui serve equilibrio)
+        const lift = ctl.stoppie && ctl.brake && speed > 4 && this.wheelie < 0.02;
+        if (lift) this.stoppieVel += (2.4 + this.stoppie * 2.8) * dt * Math.min(1.5, speed / 7);
+        else if (this.stoppie > 0) this.stoppieVel -= (2.6 + this.stoppie * 1.5) * dt;
+        this.stoppieVel *= 1 - Math.min(1, dt * 1.8);
+        this.stoppie += this.stoppieVel * dt;
+        if (this.stoppie <= 0) { this.stoppie = 0; this.stoppieVel = Math.max(0, this.stoppieVel); }
+        if (this.stoppie > 0.82) this.crash = 'stoppie';
+        if (this.stoppie > 0.02) speed -= Math.sign(speed) * Math.min(Math.abs(speed), s.brake * 0.6 * dt);
+      } else {
+        // Bici: impennata semplice e sicura
+        const wantWheelie = s.ride && ctl.wheelie && speed > 2.5;
+        this.wheelie += ((wantWheelie ? 0.45 : 0) - this.wheelie) * Math.min(1, dt * (wantWheelie ? 2.6 : 4.5));
+      }
+      const steerIn = ctl.steer * (1 - Math.min(0.7, this.wheelie + this.stoppie));
+      this.steer += (steerIn - this.steer) * Math.min(1, dt * (s.ride ? 9 : 6));
+      // Cambio: in manuale E/Q cambiano marcia; in automatico la marcia segue la velocità
+      const n = this.gears;
+      if (n) {
+        if (this.manual) {
+          if (ctl.gearUp) this.gear = Math.min(n, this.gear + 1);
+          if (ctl.gearDown) this.gear = Math.max(1, this.gear - 1);
+        } else {
+          let g = 1;
+          while (g < n && speed > gearTop(g, n) * vmax * 0.92) g++;
+          this.gear = g;
+        }
+      }
+      const gTop = n ? gearTop(this.gear, n) * vmax : vmax;
+      const gLow = n && this.gear > 1 ? gearTop(this.gear - 1, n) * vmax : 0;
+      this.rpm = n ? THREE.MathUtils.clamp(Math.abs(speed) / Math.max(1, gTop), 0, 1) : Math.min(1, Math.abs(speed) / vmax);
       if (ctl.throttle && power > 0) {
         if (speed < -0.4) speed += s.brake * dt;
-        else speed += s.accel * power * dt * Math.max(0.15, 1 - speed / vmax);
+        else if (n && this.manual) {
+          // Marcia troppo alta da fermo: il motore "strappa" e spinge poco; oltre il limite della marcia c'è il limitatore
+          const lug = speed < gLow * 0.55 ? 0.35 : 1;
+          const boost = 1.35 - 0.09 * (this.gear - 1);
+          if (speed < gTop) speed = Math.min(gTop, speed + s.accel * power * dt * boost * lug * Math.max(0.2, 1 - speed / vmax));
+          else speed -= 1.5 * dt;
+        } else speed += s.accel * power * dt * Math.max(0.15, 1 - speed / vmax);
+      } else if (n && this.manual && speed > gTop + 0.5 && !ctl.brake) {
+        // Scalata con il mezzo veloce: freno motore
+        speed -= 3.5 * dt;
       } else if (ctl.brake) {
         if (speed > 0.4) speed -= s.brake * dt;
         else speed -= s.reverseAccel * dt;
@@ -546,10 +1026,14 @@ export class Vehicle {
     } else {
       this.steer += (0 - this.steer) * Math.min(1, dt * 4);
       this.wheelie += (0 - this.wheelie) * Math.min(1, dt * 4);
+      this.stoppie += (0 - this.stoppie) * Math.min(1, dt * 4);
+      this.wheelieVel = this.stoppieVel = 0;
       speed -= Math.sign(speed) * Math.min(Math.abs(speed), 7 * dt);
     }
     speed = THREE.MathUtils.clamp(speed, -s.reverseMax, Math.max(vmax, Math.min(speed, s.maxSpeed)));
-    const yawRate = this.steer * s.steer * THREE.MathUtils.clamp(speed / 5, -1, 1) / (1 + Math.abs(speed) / 30);
+    // Moto e motorini sterzano di più alle alte velocità (piega): curva più reattiva e fluida
+    const speedDamp = this.motorTwoWheel ? 1 + Math.abs(speed) / 50 : 1 + Math.abs(speed) / 30;
+    const yawRate = this.steer * s.steer * (this.motorTwoWheel ? 1.18 : 1) * THREE.MathUtils.clamp(speed / 5, -1, 1) / speedDamp;
     v.x = fx * speed;
     v.z = fz * speed;
     if (v.y > 2) v.y = 2; // niente "salti" sui cordoli
@@ -564,16 +1048,34 @@ export class Vehicle {
     this.mesh.position.set(p.x, p.y, p.z);
     this.mesh.quaternion.set(this.body.interpolatedQuaternion.x, this.body.interpolatedQuaternion.y, this.body.interpolatedQuaternion.z, this.body.interpolatedQuaternion.w);
     if (this.spec.ride) {
-      // Piega in curva stile MotoGP (più marcata sulle moto) e impennata attorno all'asse posteriore
-      const maxLean = this.kind === 'moto' ? 0.62 : this.kind === 'scooter' ? 0.48 : 0.4;
-      const targetLean = this.isStatic ? 0 : THREE.MathUtils.clamp(-(this.yawRate || 0) * this.speed * 0.06, -maxLean, maxLean);
-      this.lean += (targetLean - this.lean) * Math.min(1, dt * 5);
-      this.mesh.rotateZ(this.lean);
-      if (this.wheelie > 0.005) {
+      if (this.fallen) {
+        // A terra su un fianco dopo una caduta (finché non lo rialzi con F)
+        this.mesh.rotateZ(1.32);
+        this.mesh.position.y += 0.05;
+      } else {
+        // Piega in curva stile MotoGP: molto marcata su moto e motorini, leggera sulla bici
+        const maxLean = this.kind === 'moto' ? 0.88 : this.kind === 'scooter' ? 0.66 : 0.42;
+        const leanK = this.motorTwoWheel ? 0.09 : 0.06;
+        const targetLean = this.isStatic ? 0 : THREE.MathUtils.clamp(-(this.yawRate || 0) * this.speed * leanK, -maxLean, maxLean);
+        this.lean += (targetLean - this.lean) * Math.min(1, dt * (this.motorTwoWheel ? 7.5 : 5));
+        this.mesh.rotateZ(this.lean);
         const half = this.spec.wheelBase / 2;
-        this.mesh.translateZ(-half);
-        this.mesh.rotateX(-this.wheelie);
-        this.mesh.translateZ(half);
+        if (this.wheelie > 0.005) {
+          // Impennata attorno all'asse posteriore
+          this.mesh.translateZ(-half);
+          this.mesh.rotateX(-this.wheelie);
+          this.mesh.translateZ(half);
+        } else if (this.stoppie > 0.005) {
+          // Stoppie attorno all'asse anteriore
+          this.mesh.translateZ(half);
+          this.mesh.rotateX(this.stoppie);
+          this.mesh.translateZ(-half);
+        }
+      }
+      // Pedalata: la guarnitura gira con la velocità (rapporto ~1:2 rispetto alla ruota)
+      if (this.crank) {
+        this.pedalPhase += (Math.max(0, this.speed) / this.spec.wheelR) * dt * 0.5;
+        this.crank.rotation.x = this.pedalPhase;
       }
     }
     this.wheelSpin += (this.speed / this.spec.wheelR) * dt;
@@ -589,7 +1091,8 @@ export class Vehicle {
   }
 
   dispose() {
-    this.physics.removeBody(this.body);
+    if (this.bodyInWorld) this.physics.removeBody(this.body);
+    this.bodyInWorld = false;
     this.scene.remove(this.mesh);
     if (this.glb) models.releaseMixer(this.glb.mixer);
     disposeObject3D(this.mesh); // salta geometrie/texture condivise dei .glb (userData.sharedAsset)
@@ -709,7 +1212,7 @@ export class VehicleManager {
   }
 
   spawnParked(spots, rng) {
-    const models = ['utilitaria', 'utilitaria', 'berlina', 'berlina', 'suv', 'sportiva', 'motorino', 'moto_naked', 'bici'];
+    const models = ['utilitaria', 'utilitaria', 'berlina', 'berlina', 'suv', 'sportiva', 'motorino', 'moto_naked', 'bici', 'vespa_primavera'];
     for (const [x, z, heading] of spots) {
       const model = models[Math.floor(rng() * models.length)];
       const colors = VEHICLE_MODELS[model].colors;
@@ -726,7 +1229,7 @@ export class VehicleManager {
     let best = null;
     let bestD = Infinity;
     for (const v of this.list) {
-      if (v.occupied) continue;
+      if (v.occupied || !v.active) continue;
       const p = v.body.position;
       const d = Math.hypot(p.x - x, p.z - z) - Math.max(v.spec.wid, v.spec.len * 0.5) * 0.5;
       if (d < maxDist && d < bestD) { bestD = d; best = v; }
@@ -735,11 +1238,16 @@ export class VehicleManager {
   }
 
   update(dt, driven, ctl) {
-    for (const v of this.list) v.update(dt, v === driven ? ctl : null);
+    for (const v of this.list) if (v.active) v.update(dt, v === driven ? ctl : null);
   }
 
   sync(dt) {
-    for (const v of this.list) v.sync(dt);
+    for (const v of this.list) if (v.active) v.sync(dt);
+  }
+
+  /** Veicoli custoditi nel garage di casa. */
+  garaged() {
+    return this.list.filter((v) => v.inGarage && (v.owner === 'player' || v.owner === 'stolen'));
   }
 
   serializeOwned() {
@@ -748,6 +1256,7 @@ export class VehicleManager {
       .map((v) => ({
         uid: v.uid, model: v.model, color: v.color, owner: v.owner, health: Math.round(v.health),
         x: +v.body.position.x.toFixed(2), z: +v.body.position.z.toFixed(2), heading: +v.heading.toFixed(3),
+        inGarage: v.inGarage, bay: v.bay, tune: { ...v.tune },
       }));
   }
 

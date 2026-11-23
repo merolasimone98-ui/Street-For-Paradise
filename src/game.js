@@ -10,7 +10,7 @@ import { AutoSaver } from './save.js';
 import { getCity, getFamily, formatMoney, seededRandom } from './birthdata.js';
 import { Interior } from './interiors.js';
 import { PlayerState, GROUPS } from './playerstate.js';
-import { ITEMS, itemInfo } from './items.js';
+import { ITEMS, itemInfo, SERVICE_PRICES } from './items.js';
 import { VehicleManager, KIND_LABEL } from './vehicle.js';
 import { NpcManager, pickHomelessSpots } from './npcs.js';
 import { RestaurantService } from './restaurant.js';
@@ -27,6 +27,10 @@ import { rewardFor, levelTitle, PARADISE_LEVEL, PARADISE_PREVIEW_LEVEL, MAX_AURA
 import { PoliceManager } from './police.js';
 import { Workshop } from './workshop.js';
 import { VEHICLE_MODELS } from './items.js';
+import { HomeGarage } from './garage.js';
+import { TrafficManager } from './traffic.js';
+import { RADIO_STATIONS } from './audio.js';
+import { PLAZA } from './world.js';
 
 const LOOT_ITEMS = ['torcia', 'coperta', 'kit_pronto_soccorso', 'candela'];
 
@@ -45,7 +49,7 @@ const CHURCH_TYPES = ['church', 'cathedral', 'chapel'];
 const SURFACE_BY_DOOR = {
   home: 'wood', hospital: 'tile', market: 'tile', bank: 'marble', bar: 'wood', garage: 'asphalt', weapons: 'wood',
   clothing: 'wood', pharmacy: 'tile', restaurant: 'wood', pizzeria: 'tile', church: 'marble', police: 'tile',
-  cathedral: 'marble', chapel: 'marble', house: 'wood', workshop: 'asphalt',
+  cathedral: 'marble', chapel: 'marble', house: 'wood', workshop: 'asphalt', homegarage: 'asphalt',
 };
 
 export class Game {
@@ -118,9 +122,20 @@ export class Game {
       for (const v of this.vehicles.list.filter((x) => !x.spec.ride).slice(0, 5)) v.mesh.traverse((o) => { if (o.isMesh && o.material.clearcoat !== undefined && o.material.opacity === 1) o.material.color.set(this.world.style.taxi); });
     }
     this.vehicles.spawnSaved(this.state.vehicles);
+    // Garage di casa: veicoli custoditi nei box, consegne del concessionario, tuning
+    this.garage = new HomeGarage(this);
+    this.garage.normalizeBays();
+    this.sadWarnDay = -1;
     this.npcs = new NpcManager(this.scene, this.physics, this.world, this.state, rng);
     this.npcs.spawnPedestrians(PEDESTRIANS);
     this.npcs.spawnHomeless(pickHomelessSpots(this.world, rng, 5));
+    // Traffico: auto, scooter, Vespe e moto guidati da NPC
+    this.traffic = new TrafficManager(this, seededRandom((seed ^ 0x7a11c) >>> 0));
+    // Guida: radio (−1 = spenta), abbaglianti, clacson, caduta dalla moto
+    this.radioIdx = -1;
+    this.highBeam = false;
+    this.beamCheckT = 0;
+    this.knockdown = null;
     // Case già acquistate nei salvataggi: cartello VENDESI rimosso e nome aggiornato
     for (const door of this.world.houses) if (this.state.houses.includes(door.house.id)) this.markHouseOwned(door);
 
@@ -412,6 +427,13 @@ export class Game {
         // Anche a piedi i veicoli vanno aggiornati: si fermano e diventano statici (non scivolano se li urti)
         this.vehicles.update(dt, null, null);
       }
+      if (!this.interior) {
+        this.traffic.update(dt, {
+          pos: this.mapPosition(), night: this.lastNight || 0, police: this.police.cars,
+          vehicle: this.driving, onFoot: this.driving ? null : this.player.feet,
+        });
+      }
+      this.updateKnockdown(dt);
       this.physics.step(1 / 60, dt, 5);
       if (!this.driving && this.player.bodyInWorld && this.player.body.position.y < -20) {
         const sp = this.world.getSpawn();
@@ -419,6 +441,7 @@ export class Game {
       }
       this.autosaver.update(dt);
       this.updateDrunk(dt);
+      this.updateHappiness(dt);
       this.updateLevelUps();
       this.checkHealth();
     }
@@ -454,18 +477,28 @@ export class Game {
     if (running) this.police.update(dt);
     this.vehicles.sync(dt);
     this.police.sync(dt);
+    if (!this.interior) this.traffic.sync(dt);
     if (running && !this.interior) this.vehicles.updateSmoke(dt, this.mapPosition(), this.police.cars);
     this.updateShotFx(dt);
     if (this.driving) this.placeRider();
     this.player.animate(running ? dt : 0);
     this.escMenu.update(dt);
 
-    // Camera (terza o prima persona)
+    // Camera (terza o prima persona; in auto la prima persona mostra l'abitacolo)
     let focus = this.player.feet;
-    this.rig.allowFirstPerson = !this.driving && this.player.pose === 'auto';
+    const carFP = !!(this.driving && this.driving.cockpit && !this.driving.spec.ride);
+    this.rig.allowFirstPerson = (!this.driving && this.player.pose === 'auto') || carFP;
+    let eyeOverride = null;
     if (this.driving) {
       const vp = this.driving.position;
       focus = new THREE.Vector3(vp.x, vp.y, vp.z);
+      if (carFP && this.rig.fpBlend > 0.02) {
+        // Occhi del pilota al posto di guida (coordinate locali dell'abitacolo)
+        this.driving.mesh.updateMatrixWorld(true);
+        focus = this.driving.mesh.localToWorld(this.driving.cockpit.eye.clone());
+        eyeOverride = 0;
+      }
+      this.driving.updateCockpit(carFP && this.rig.fpBlend > 0.3);
       this.mouseIdle = mouse.dx || mouse.dy ? 0 : this.mouseIdle + dt;
       if (this.mouseIdle > 1.2 && Math.abs(this.driving.speed) > 2) {
         const behind = this.driving.heading + (this.driving.speed < 0 ? 0 : Math.PI);
@@ -475,7 +508,7 @@ export class Game {
         this.rig.yaw += d * Math.min(1, dt * 2.5);
       }
     }
-    const eye = 1.7 * this.player.mesh.userData.scale;
+    const eye = eyeOverride ?? 1.7 * this.player.mesh.userData.scale;
     this.rig.aim = !!this.player.aiming;
     this.rig.update(dt, mouse, focus, eye);
     // Zoom della mira
@@ -494,8 +527,11 @@ export class Game {
     this.player.mesh.userData.head.visible = !fp;
     if (fp && this.player.pose === 'auto') this.player.facing = this.rig.yaw + Math.PI;
     const light = this.dayCycle.update(this.hour, focus);
+    this.lastNight = light.night;
     this.renderer.toneMappingExposure += (this.dayCycle.exposure - this.renderer.toneMappingExposure) * Math.min(1, dt * 2);
     this.updateHeadlights(light.night);
+    for (const c of this.police.cars) c.setLights(light.night > 0.3 ? 1 : 0, c.speed < 1);
+    this.world.updateTraffic(this.elapsed, light.night);
     this.updateAmbience(dt);
 
     const mapPos = this.mapPosition();
@@ -511,7 +547,122 @@ export class Game {
       stars: this.police.stars, starsBlink: this.police.blinking, police: this.interior ? [] : this.police.dots(),
       crosshair: !!this.player.aiming && ((this.rig.aimBlend || 0) > 0.5 || this.rig.fpBlend > 0.5),
       vehicleHealth: this.driving ? this.driving.health : null,
+      happiness: this.state.happiness, happyIcon: this.state.happinessIcon(), speedUnit: this.settings.speedUnit,
+      balance: this.driving && this.driving.motorTwoWheel
+        ? { wheelie: this.driving.wheelie, stoppie: this.driving.stoppie, wLimit: this.driving.kind === 'moto' ? 1.12 : 0.98, sLimit: 0.82 }
+        : null,
+      highBeam: !!(this.driving && this.highBeam),
     });
+  }
+
+  /* =====================================================================
+     Caduta dalla moto/motorino (impennata o stoppie esagerati)
+     ===================================================================== */
+  bikeCrash(v) {
+    const kind = v.crash;
+    v.crash = null;
+    const speed = Math.abs(v.speed);
+    const h = v.heading;
+    v.wheelie = v.stoppie = v.wheelieVel = v.stoppieVel = 0;
+    this.exitVehicle();
+    v.speed = 0;
+    v.body.velocity.set(0, 0, 0);
+    v.fallen = true;
+    v.applyDamage(6 + speed * 0.6);
+    // Il pilota vola all'indietro (impennata) o in avanti (stoppie) e resta a terra qualche istante
+    const dir = kind === 'stoppie' ? 1 : -1;
+    const dist = 1.6 + Math.min(4, speed * 0.25);
+    const p = v.body.position;
+    let x = p.x + Math.sin(h) * dist * dir, z = p.z + Math.cos(h) * dist * dir;
+    const ex = this.safeExitPoint(v);
+    if (!Number.isFinite(x) || Math.hypot(x - ex.x, z - ex.z) > 8) { x = ex.x; z = ex.z; }
+    const dmg = Math.round(10 + speed * 1.1);
+    this.state.damage(dmg);
+    this.state.changeHappiness(-6, kind === 'stoppie' ? 'Caduta in stoppie' : 'Ti sei schienato in impennata');
+    audio.crash(1.2);
+    audio.hurt();
+    this.player.setPhysicsEnabled(false);
+    this.player.setPose('lie', new THREE.Vector3(x, (this.interior ? 0 : 0.02) + 0.12, z), h + (dir > 0 ? 0 : Math.PI));
+    this.knockdown = { t: 0, dur: 1.9, x, z, facing: h };
+    this.toast(kind === 'stoppie'
+      ? `Stoppie esagerato: sei volato oltre il manubrio! −${dmg} salute. Rialza ${v.name} con F.`
+      : `Ti sei schienato in impennata! −${dmg} salute. Rialza ${v.name} con F.`, 3600);
+  }
+
+  updateKnockdown(dt) {
+    const k = this.knockdown;
+    if (!k) return;
+    k.t += dt;
+    if (k.t < k.dur) return;
+    this.knockdown = null;
+    this.player.setPose('auto');
+    this.player.setPhysicsEnabled(true);
+    this.player.setPosition(k.x, this.interior ? 0 : 0.25, k.z, k.facing);
+    this.player.updateHeld(this.state.equipped);
+  }
+
+  /** Clacson, abbaglianti e radio del veicolo guidato. */
+  updateVehicleExtras(dt, control) {
+    const v = this.driving;
+    const hornKind = v.kind === 'bike' ? 'bike' : v.spec.ride ? v.kind : 'car';
+    // Clacson [H]: tocco = colpo breve, tenuto = suono prolungato. I passanti vicini sobbalzano.
+    if (control && this.input.down('KeyH')) {
+      if (!audio.horn) {
+        audio.hornStart(hornKind);
+        const p = v.body.position;
+        this.npcs.startle(p.x, p.z, v.kind === 'bike' ? 12 : 24);
+        this.traffic.reactHorn(p.x, p.z);
+      }
+    } else if (audio.horn) audio.hornStop();
+    // Abbaglianti [T]
+    if (control && this.input.consumePressed('KeyT')) {
+      this.highBeam = !this.highBeam;
+      audio.click();
+      this.toast(this.highBeam ? '💡 Abbaglianti accesi' : '💡 Abbaglianti spenti', 1200);
+    }
+    if (this.highBeam) {
+      this.beamCheckT -= dt;
+      if (this.beamCheckT <= 0) {
+        this.beamCheckT = 0.5;
+        const p = v.body.position;
+        this.npcs.dazzle(p.x, p.z, v.heading, (this.lastNight || 0) > 0.3 ? 50 : 22);
+        this.traffic.reactHighBeam(p.x, p.z, v.heading);
+      }
+    }
+    // Radio [R] (solo in auto): spenta → 4 stazioni → spenta
+    if (control && !v.spec.ride && this.input.consumePressed('KeyR')) {
+      this.radioIdx = this.radioIdx + 1 >= RADIO_STATIONS.length ? -1 : this.radioIdx + 1;
+      this.applyRadio(v, true);
+    }
+  }
+
+  applyRadio(v, announce = false) {
+    if (this.radioIdx < 0 || !v || v.spec.ride) {
+      audio.radioStop();
+      if (v) v.setRadioText('RADIO OFF');
+      if (announce) this.toast('📻 Radio spenta', 1200);
+      return;
+    }
+    const st = RADIO_STATIONS[this.radioIdx];
+    audio.radioStart(this.radioIdx);
+    v.setRadioText(st.name.split(' · ')[0].toUpperCase());
+    if (announce) this.toast(`📻 ${st.name}`, 1600);
+  }
+
+  /**
+   * Felicità nel tempo: tende piano verso il 50% (le emozioni si attenuano), cala se stai male
+   * e un pasto al giorno fa piacere. Sotto il 20% compare un avviso (una volta al giorno).
+   */
+  updateHappiness(dt) {
+    const st = this.state;
+    const gameHours = (dt * GAME_MINUTES_PER_SECOND) / 60;
+    st.happiness += (50 - st.happiness) * Math.min(1, 0.04 * gameHours);
+    if (st.health < st.maxHealth * 0.3) st.changeHappiness(-1.5 * gameHours);
+    if (st.drunk > 30) st.changeHappiness(-0.8 * gameHours);
+    if (st.happiness < 20 && this.sadWarnDay !== this.day) {
+      this.sadWarnDay = this.day;
+      this.toast(`${st.happinessIcon()} Ti senti giù di morale. Un buon pasto, una Messa, un'opera di bene o una notte di sonno ti tireranno su.`, 4200);
+    }
   }
 
   /** Data del calendario corrispondente al giorno di gioco corrente. */
@@ -560,21 +711,35 @@ export class Game {
 
   updateDriving(dt, control) {
     const v = this.driving;
+    v.manual = this.settings.gearbox === 'manual';
+    // Senza controllo (pausa, inventario TAB, finestre aperte) il mezzo va in folle e rallenta da solo:
+    // nessun freno né retromarcia "fantasma".
     const ctl = control ? {
       throttle: this.input.down('KeyW', 'ArrowUp'),
       brake: this.input.down('KeyS', 'ArrowDown'),
       steer: (this.input.down('KeyA', 'ArrowLeft') ? 1 : 0) - (this.input.down('KeyD', 'ArrowRight') ? 1 : 0),
       handbrake: this.input.down('Space'),
       wheelie: this.input.down('ShiftLeft', 'ShiftRight'),
-    } : { throttle: false, brake: true, steer: 0, handbrake: false, wheelie: false };
+      stoppie: this.input.down('ControlLeft'),
+      gearUp: v.manual && this.input.consumePressed('KeyE'),
+      gearDown: v.manual && this.input.consumePressed('KeyQ'),
+    } : { throttle: false, brake: false, steer: 0, handbrake: false, wheelie: false, stoppie: false, gearUp: false, gearDown: false };
+    if ((ctl.gearUp || ctl.gearDown) && v.gears) audio.click();
     const wasBroken = v.broken;
     this.vehicles.update(dt, v, ctl);
-    audio.engineUpdate(v.uid, v.broken ? 0 : v.speed, v.spec.maxSpeed, ctl.throttle && !v.broken);
+    // Impennata o stoppie esagerati: il mezzo si ribalta e il pilota cade
+    if (v.crash) { this.bikeCrash(v); return; }
+    // Fari: anabbaglianti di notte, abbaglianti con T, luci di stop in frenata
+    const night = this.lastNight || 0;
+    v.setLights(this.highBeam ? 2 : night > 0.3 ? 1 : 0, (ctl.brake && v.speed > -0.3) || ctl.handbrake);
+    this.updateVehicleExtras(dt, control);
+    audio.engineUpdate(v.uid, v.broken ? 0 : v.speed, v.spec.maxSpeed, ctl.throttle && !v.broken, v.gears && !v.broken ? v.rpm : null);
     if (v.impact > 0) {
       const dmg = (v.impact - 6) * (v.spec.ride ? 5 : 2.5);
       audio.crash(v.impact / 10);
       if (dmg > 1) {
         this.state.damage(dmg);
+        this.state.changeHappiness(-Math.min(6, 1 + dmg / 8), 'Incidente stradale');
         audio.hurt();
         this.toast(`Incidente! −${Math.round(dmg)} salute · veicolo al ${Math.round(v.health)}%`, 1800);
       }
@@ -582,8 +747,12 @@ export class Game {
     if (v.broken && !wasBroken) {
       audio.engineDie();
       audio.engineStop(v.uid);
+      this.state.changeHappiness(-5, 'Il veicolo è in panne');
       this.toast(`${v.name} è in panne! Fallo riparare dal meccanico dell'Officina (O sulla mappa): lo sistema ovunque sia.`, 4200);
     }
+    // Garage di casa: entri guidando piano verso la serranda, esci superandola dall'interno
+    if (this.garage.inside) this.garage.checkDriveOut(v);
+    else if (!this.interior) this.garage.checkDriveIn(v, dt);
     this.state.restoreStamina(12 * dt);
     if (this.state.exhausted && this.state.stamina >= 30) this.state.exhausted = false;
   }
@@ -620,15 +789,21 @@ export class Game {
       this.scene.add(this.headlight, this.headlight.target);
     }
     const v = this.driving;
-    const on = v && !this.interior && night > 0.3 && !v.broken;
+    const high = !!(v && this.highBeam);
+    const on = v && !this.interior && (night > 0.3 || (high && night > 0.12)) && !v.broken;
     if (!on) { this.headlight.intensity = 0; return; }
     const h = v.heading;
     const p = v.body.interpolatedPosition;
     const front = v.spec.ride ? 0.6 : v.spec.len / 2;
+    // Abbaglianti: fascio più stretto, più lungo e più potente
+    const reach = high ? 48 : 18;
+    this.headlight.distance = high ? 140 : 60;
+    this.headlight.angle = high ? 0.36 : 0.5;
     this.headlight.position.set(p.x + Math.sin(h) * front, p.y + 0.8, p.z + Math.cos(h) * front);
-    this.headlight.target.position.set(p.x + Math.sin(h) * (front + 18), p.y - 0.5, p.z + Math.cos(h) * (front + 18));
+    this.headlight.target.position.set(p.x + Math.sin(h) * (front + reach), p.y - (high ? 0.2 : 0.5), p.z + Math.cos(h) * (front + reach));
     this.headlight.target.updateMatrixWorld();
-    this.headlight.intensity = (v.spec.ride ? 160 : 260) * Math.min(1, (night - 0.3) * 3);
+    const k = Math.min(1, Math.max(0, night - 0.12) * 3);
+    this.headlight.intensity = (v.spec.ride ? 160 : 260) * (high ? 2.6 : 1) * k;
   }
 
   buildShotFx() {
@@ -669,6 +844,7 @@ export class Game {
       for (const n of [...this.npcs.pedestrians, ...this.npcs.homeless]) if (n.mesh.visible) targets.push(n.mesh);
       for (const v of this.vehicles.list) targets.push(v.mesh);
       for (const c of this.police.cars) targets.push(c.mesh);
+      targets.push(...this.traffic.meshes());
       targets.push(...this.world.collidables);
     }
     const hits = this.shooter.intersectObjects(targets, true).filter((h) => h.distance > 1.2);
@@ -741,6 +917,7 @@ export class Game {
       const seat = v.mesh.localToWorld(new THREE.Vector3(0, v.spec.seatY - this.player.mesh.userData.hipHeight, v.spec.seatZ));
       this.player.rideQuat = v.mesh.quaternion;
       this.player.rideLean = v.lean;
+      this.player.pedalPhase = v.crank ? v.pedalPhase : null; // bici: le gambe pedalano
       this.player.setPose('ride', seat, v.heading);
     } else {
       const p = v.position;
@@ -822,6 +999,7 @@ export class Game {
     this.player.updateHeld(st.equipped);
     if (d.stamina) st.restoreStamina(d.stamina);
     if (d.heal) st.heal(d.heal);
+    st.changeHappiness(d.alcohol ? 2.5 : 1.5, `Al bar: ${d.name}`);
     if (d.alcohol) {
       st.drunk = Math.min(100, st.drunk + d.alcohol);
       if (st.drunk > DRUNK_FAINT) { this.faint('drunk'); return; }
@@ -847,6 +1025,7 @@ export class Game {
     const st = this.state;
     if (!st.levelUps.length || this.transitioning) return;
     const lvl = st.levelUps.shift();
+    st.changeHappiness(5, `Livello Aura ${lvl}`);
     audio.confirm();
     this.hud.flashLevel(lvl);
     this.toast(`✨ LIVELLO AURA ${lvl}${lvl >= MAX_AURA_LEVEL ? ' (MASSIMO)' : ''} · ${levelTitle(lvl)} — riscatta la ricompensa nell'app «Livelli» del telefono (TAB).`, 5000);
@@ -872,7 +1051,7 @@ export class Game {
     if (r.vehicle) {
       const model = r.vehicle;
       setTimeout(() => { if (!this.disposed) this.onPurchaseVehicle(model, null, true); }, 300);
-      got.push('veicolo consegnato vicino a te');
+      got.push('veicolo consegnato nel garage di casa');
     }
     audio.cash();
     this.autosaver.saveNow();
@@ -921,6 +1100,7 @@ export class Game {
     st.lastChurchPenaltyDay = this.day;
     const loss = since === 7 ? 5 : 2;
     st.changeAura(-loss, `Non vai in chiesa da ${since} giorni`);
+    st.changeHappiness(-2, 'Ti manca la pace della chiesa');
     this.toast(`Non vai in chiesa da ${since} giorni: −${loss} Aura. Una Messa ti farà bene.`, 4000);
   }
 
@@ -934,6 +1114,7 @@ export class Game {
     if (impactSpeed > 12) {
       const dmg = (impactSpeed - 12) * 7;
       this.state.damage(dmg);
+      this.state.changeHappiness(-3, 'Brutta caduta');
       audio.hurt();
       this.toast(`Caduta! −${Math.round(dmg)} salute`, 1500);
     }
@@ -947,7 +1128,7 @@ export class Game {
      Interazioni [E] e veicoli [F]
      ===================================================================== */
   updateInteraction() {
-    if (this.transitioning || this.action || this.drinking) {
+    if (this.transitioning || this.action || this.drinking || this.knockdown) {
       this.hud.hidePrompt();
       return;
     }
@@ -960,6 +1141,16 @@ export class Game {
     if (this.driving) {
       fLabel = `scendere ${{ bike: 'dalla bici', scooter: 'dal motorino', moto: 'dalla moto' }[this.driving.kind] || `dall'${KIND_LABEL[this.driving.kind]}`}`;
       fAction = () => this.exitVehicle();
+      // Davanti alla serranda di casa: suggerimento (una volta per avvicinamento) per entrare in garage guidando
+      const gd = this.garage.door;
+      if (gd && !this.interior && (this.driving.owner === 'player' || this.driving.owner === 'stolen')) {
+        const p = this.driving.body.position;
+        const near = Math.abs(p.x - gd.x) < 6 && (p.z - gd.z) * gd.nz > 0 && (p.z - gd.z) * gd.nz < 14;
+        if (near && !this.garageHint) {
+          this.garageHint = true;
+          if (this.garage.freeBay() >= 0) this.toast('Garage di casa: guida piano verso la serranda per entrare.', 2600);
+        } else if (!near) this.garageHint = false;
+      }
     } else if (this.player.pose === 'sit') {
       if (this.restaurant && this.restaurant.canStand) consider(0, 'alzarti', () => this.restaurant.stand());
     } else if (this.interior) {
@@ -970,6 +1161,16 @@ export class Game {
         const d = Math.hypot(feet.x - it.x, feet.z - it.z);
         if (d <= it.radius) consider(d, it.label, () => this.runInteraction(it));
       }
+      // Garage di casa: [F] guida il veicolo, [E] tuning del veicolo vicino
+      if (this.garage.inside) {
+        const v = this.vehicles.nearest(feet.x, feet.z, 1.4);
+        if (v) {
+          fLabel = `guidare ${v.name}`;
+          fAction = () => this.mountVehicle(v);
+          const p = v.body.position;
+          consider(Math.hypot(feet.x - p.x, feet.z - p.z) - 1.5, `modificare ${v.name} (tuning)`, () => this.dialogs.tuning(v));
+        }
+      }
     } else {
       if (this.player.grounded) {
         const door = this.world.nearestDoor(feet.x, feet.z, INTERACT_RADIUS);
@@ -979,6 +1180,9 @@ export class Game {
           if (door.type === 'house') {
             const owned = this.state.houses.includes(door.house.id);
             consider(dist, owned ? `entrare · ${door.name}` : `vedere la ${door.house.kind} in vendita · ${formatMoney(door.house.price)}`, () => this.houseDoor(door));
+          } else if (door.type === 'homegarage') {
+            const n = this.garage.vehicles().length;
+            consider(dist, `entrare nel garage · ${n}/${this.garage.capacity} box occupati`, () => this.enterBuilding(door));
           } else {
             consider(dist, `entrare · ${door.name}`, () => this.enterBuilding(door));
           }
@@ -1052,14 +1256,17 @@ export class Game {
       case 'workpc': if (this.workshop) this.workshop.computer(); break;
       case 'ws': if (this.workshop) this.workshop.interact(it); break;
       case 'calendar': this.dialogs.calendar(this.today()); break;
+      case 'tuning': this.dialogs.tuningGarage(); break;
       case 'mass': this.attendMass(); break;
       case 'confess': this.confess(); break;
       case 'hospital': {
         if (st.health >= st.maxHealth - 0.5) { this.toast('Il medico ti visita: sei in perfetta salute!'); break; }
-        if (st.payWith(150, 'cash') || st.payWith(150, 'card')) {
+        const fee = SERVICE_PRICES.hospital;
+        if (st.payWith(fee, 'cash') || st.payWith(fee, 'card')) {
           st.heal(st.maxHealth);
+          st.changeHappiness(3, 'Ti senti di nuovo in forma');
           audio.cash();
-          this.toast('Cure completate: salute al massimo (−€ 150).');
+          this.toast(`Cure completate: salute al massimo (−${formatMoney(fee)}).`);
         } else {
           st.heal(st.maxHealth * 0.6);
           this.toast('Non puoi pagare: la sanità pubblica ti cura comunque.');
@@ -1164,6 +1371,7 @@ export class Game {
   buyHouse(door) {
     const st = this.state;
     if (!st.houses.includes(door.house.id)) st.houses.push(door.house.id);
+    st.changeHappiness(15, `Hai comprato ${door.house.kind === 'villetta' ? 'una villetta' : 'una casa'}`);
     this.markHouseOwned(door);
     this.toast(`Congratulazioni! ${door.name} è tua: puoi dormirci e consultare il calendario.`, 4000);
     setTimeout(() => { if (!this.disposed) this.autosaver.saveNow(); }, 500);
@@ -1229,6 +1437,8 @@ export class Game {
       st.removeItem(id, 1);
       st.heal(it.heal || 0);
       if (it.stamina) st.restoreStamina(it.stamina);
+      // Il cibo buono mette di buon umore (più è sostanzioso, più fa piacere)
+      st.changeHappiness(Math.max(0.5, Math.min(4, (it.heal || 0) / 6)), `Hai mangiato: ${it.name}`);
       if (['acqua', 'caffe'].includes(id)) audio.drink(); else audio.eat();
       return `Hai consumato: ${it.name} (+${it.heal || 0} salute${it.stamina ? `, +${it.stamina} stamina` : ''}).`;
     }
@@ -1250,9 +1460,16 @@ export class Game {
 
   /* ---------- Veicoli ---------- */
   ownedVehicles() {
+    const gd = this.garage ? this.garage.door : null;
     return this.vehicles.list
       .filter((v) => v.owner === 'player' || v.owner === 'stolen')
-      .map((v) => ({ uid: v.uid, name: v.name + (v.owner === 'stolen' ? ' (rubato)' : ''), x: v.body.position.x, z: v.body.position.z }));
+      .map((v) => {
+        const inG = v.inGarage && gd;
+        return {
+          uid: v.uid, name: v.name + (v.owner === 'stolen' ? ' (rubato)' : ''), inGarage: v.inGarage, health: v.health, kind: v.kind,
+          x: inG ? gd.x : v.body.position.x, z: inG ? gd.z : v.body.position.z,
+        };
+      });
   }
 
   /** Si accovaccia accanto alla portiera e armeggia con il cacciavite (animazione di scasso). */
@@ -1386,7 +1603,7 @@ export class Game {
       this.exitVehicle();
       if (v.owner === 'stolen') { v.owner = 'npc'; this.state.vehicles = this.vehicles.serializeOwned(); }
     }
-    const fine = Math.min(this.state.cash, 300 * Math.max(1, this.police.stars));
+    const fine = Math.min(this.state.cash, SERVICE_PRICES.bustedFine * Math.max(1, this.police.stars));
     this.state.cash -= fine;
     this.police.clear(true);
     audio.siren(3);
@@ -1394,16 +1611,18 @@ export class Game {
   }
 
   mountVehicle(v) {
-    if (this.driving || this.interior) return;
+    if (this.driving || (this.interior && !this.garage.inside)) return;
     this.driving = v;
     v.occupied = true;
+    v.fallen = false; // rialza la moto caduta
     v.makeDynamic();
+    if (!v.spec.ride && this.radioIdx >= 0) this.applyRadio(v);
     this.player.setPhysicsEnabled(false);
     this.player.phone = false;
     this.player.setHeld(null);
     this.rig.firstPerson = false;
-    this.rig.maxDist = v.spec.ride ? 8 : 12;
-    this.rig.targetDist = v.spec.ride ? 4.8 : 7.5;
+    this.rig.maxDist = this.interior ? 6 : v.spec.ride ? 8 : 12;
+    this.rig.targetDist = this.interior ? 4.5 : v.spec.ride ? 4.8 : 7.5;
     this.rig.height = v.spec.ride ? 1.6 : 1.3;
     this.rig.yaw = v.heading + Math.PI;
     this.player.aiming = false;
@@ -1418,7 +1637,9 @@ export class Game {
     audio.engineStart(v.uid, v.kind);
     if (v.spec.ride && v.kind !== 'bike' && !this.state.stats.wheelieTip) {
       this.state.stats.wheelieTip = 1;
-      this.toast('Tieni premuto SHIFT per impennare. In curva il mezzo si piega e tu con lui!', 3600);
+      this.toast(v.kind === 'bike'
+        ? 'Tieni premuto SHIFT per impennare. In curva la bici si piega e tu con lei!'
+        : 'Impennata: SHIFT + gas, ma dosa l\'equilibrio o ti schieni! Stoppie: CTRL + freno. H clacson, T abbaglianti.', 4200);
     }
   }
 
@@ -1448,11 +1669,21 @@ export class Game {
     this.driving = null;
     audio.engineStop(v.uid);
     audio.door();
+    audio.hornStop();
+    audio.radioStop();
+    v.gear = 1;
+    v.updateCockpit(false);
+    v.setLights(0, false);
+    this.highBeam = false;
+    this.player.pedalPhase = null;
+    this.rig.firstPerson = false;
     this.player.setPose('auto');
     this.player.setPhysicsEnabled(true);
-    this.player.setPosition(ex.x, 0.35, ex.z, ex.facing);
+    this.player.setPosition(ex.x, this.interior ? 0.05 : 0.35, ex.z, ex.facing);
     this.player.updateHeld(this.state.equipped);
-    this.rig.maxDist = 10;
+    // Sceso nel garage: il veicolo torna nel suo box (fermo e statico)
+    if (this.garage.inside && v.inGarage) v.makeStatic();
+    this.rig.maxDist = this.interior ? 4 : 10;
     this.rig.height = 1.55;
     this.rig.targetDist = Math.min(this.rig.targetDist, 5);
   }
@@ -1462,25 +1693,25 @@ export class Game {
    * Nessuna attesa bloccante: la finestra è già chiusa e il controllo torna immediatamente al giocatore.
    */
   onPurchaseVehicle(model, color, delivery) {
-    let spot;
     try {
-      if (delivery && !this.interior) {
-        const f = this.player.feet;
-        const h = this.player.facing;
-        spot = { x: f.x + Math.sin(h) * 6, z: f.z + Math.cos(h) * 6, heading: h };
+      const v = this.vehicles.add({ model, color, x: -9000, z: -9000, heading: 0, owner: 'player' });
+      this.state.changeHappiness(10, `Nuovo veicolo: ${v.name}`);
+      // Consegna nel garage fisico di casa (box libero); se è pieno, in strada davanti alla serranda
+      if (this.garage.door && this.garage.store(v)) {
+        this.toast(`${v.name} consegnata nel garage di casa (box ${v.bay + 1}). Entra dalla serranda accanto alla porta di casa (G sulla mappa).`, 4600);
       } else {
-        spot = this.world.dealerSpot || { ...this.world.getSpawn(), heading: 0 };
+        let spot = this.garage.door ? this.garage.streetSpot() : (this.world.dealerSpot || { ...this.world.getSpawn(), heading: 0 });
+        // Se il punto è occupato da un altro veicolo, lo si sposta lungo la strada
+        for (let tries = 0; tries < 6; tries++) {
+          const busy = this.vehicles.list.some((x) => x !== v && x.active && Math.hypot(x.body.position.x - spot.x, x.body.position.z - spot.z) < 5);
+          if (!busy) break;
+          spot = { ...spot, x: spot.x + Math.sin(spot.heading) * 6, z: spot.z + Math.cos(spot.heading) * 6 };
+        }
+        v.teleport(spot.x, spot.z, spot.heading, 0);
+        if (this.interior) v.mesh.visible = false;
+        this.toast(`Il garage è pieno: ${v.name} ti aspetta in strada davanti a casa.`, 4200);
       }
-      // Se il punto è occupato da un altro veicolo, lo si sposta lungo la strada
-      for (let tries = 0; tries < 6; tries++) {
-        const busy = this.vehicles.list.some((x) => Math.hypot(x.body.position.x - spot.x, x.body.position.z - spot.z) < 5);
-        if (!busy) break;
-        spot = { ...spot, x: spot.x + Math.sin(spot.heading) * 6, z: spot.z + Math.cos(spot.heading) * 6 };
-      }
-      const v = this.vehicles.add({ model, color, x: spot.x, z: spot.z, heading: spot.heading, owner: 'player' });
-      if (this.interior) v.mesh.visible = false;
       this.state.vehicles = this.vehicles.serializeOwned();
-      this.toast(delivery ? `${v.name} consegnata davanti a te!` : `${v.name} acquistata! Ti aspetta in strada davanti al concessionario.`, 3500);
     } catch (e) {
       console.error('[Game] acquisto veicolo', e);
       this.toast('Il veicolo verrà consegnato a breve.');
@@ -1492,7 +1723,14 @@ export class Game {
   /* ---------- Telefono ---------- */
   taxiFare(door) {
     const f = this.mapPosition();
-    return Math.round(5 + Math.hypot(door.x - f.x, door.z - f.z) * 0.05);
+    // Tariffa realistica: scatto iniziale + € 1,20 ogni 10 m di mappa (corsa breve ~ € 10, lunga ~ € 60-90)
+    return Math.round(6 + Math.hypot(door.x - f.x, door.z - f.z) * 0.12);
+  }
+
+  /** Destinazione taxi "Piazza del Monumento" (ingresso sud della piazza). */
+  plazaTaxiDoor() {
+    const p = this.world.mapData.plaza || PLAZA;
+    return { id: 'plaza', type: 'plaza', name: `Piazza del Monumento · ${p.label || ''}`.replace(/ · $/, ''), x: p.x, z: p.z + (p.half || PLAZA.half) - 4, nx: 0, nz: 1 };
   }
 
   async taxiTo(door) {
@@ -1536,15 +1774,16 @@ export class Game {
           : 'Non risulta un conto a tuo nome. Passa in filiale per aprirlo e ritirare la carta.');
         break;
       case 'taxi':
-        tab.phoneScreen = 'taxi';
-        tab.renderPhone();
+        tab.phoneGo('taxi');
         break;
-      case 'pizza':
-        if (st.pay(12)) {
+      case 'pizza': {
+        const price = SERVICE_PRICES.pizzaDelivery;
+        if (st.pay(price)) {
           this.deliveries.push({ t: 20, item: 'pizza_trancio', qty: 4, text: 'Il fattorino ti consegna la pizza: 4 tranci nell\'inventario.' });
-          tab.call('🍕', 'Pizzeria Vesuvio', 'Ordine ricevuto: una margherita intera (€ 12). Arriva tra 20 secondi ovunque tu sia!');
-        } else tab.call('🍕', 'Pizzeria Vesuvio', 'Servono € 12 in contanti per la consegna.');
+          tab.call('🍕', 'Pizzeria Vesuvio', `Ordine ricevuto: una margherita intera (${formatMoney(price)}). Arriva tra 20 secondi ovunque tu sia!`);
+        } else tab.call('🍕', 'Pizzeria Vesuvio', `Servono ${formatMoney(price)} in contanti per la consegna.`);
         break;
+      }
       case 'police':
         tab.call('🚓', 'Polizia 112', 'Centrale operativa: «Nessuna emergenza in corso nella tua zona. Grazie per la segnalazione.»');
         break;
@@ -1637,6 +1876,8 @@ export class Game {
     st.stats.nightsSlept++;
     st.drunk = 0;
     this.drunkView = 0;
+    const ownBed = this.currentDoor && (this.currentDoor.type === 'home' || (this.currentDoor.type === 'house' && st.houses.includes(this.currentDoor.house.id)));
+    st.changeHappiness(ownBed ? 6 : 3, ownBed ? 'Una bella dormita nel tuo letto' : 'Hai dormito');
     const info = dayInfo(this.today());
     await this.showCaption('Buonanotte', `${formatDate(this.today(), true)} · ore 07:00`,
       `Hai dormito ${Math.round(slept)} ore. Salute e stamina al massimo.${info.red ? ` Oggi è ${info.feast || 'domenica'}: c'è la Messa!` : ''}`, 2600);
@@ -1652,6 +1893,11 @@ export class Game {
   leaveInteriorImmediate() {
     if (!this.interior) return;
     const door = this.currentDoor;
+    // Garage: se stavi guidando dentro, scendi; i veicoli tornano custoditi nei box
+    if (this.garage.inside) {
+      if (this.driving) this.exitVehicle();
+      this.garage.deactivate();
+    }
     if (this.restaurant) { this.restaurant.dispose(); this.restaurant = null; }
     if (this.workshop) {
       const onShift = this.workshop.onShift;
@@ -1683,6 +1929,7 @@ export class Game {
     if (this.disposed) return;
     const st = this.state;
     st.stats.arrests++;
+    st.changeHappiness(-15, 'Una notte in prigione');
     this.leaveInteriorImmediate();
     const station = this.world.doors.find((d) => d.type === 'police');
     if (station) {
@@ -1722,9 +1969,10 @@ export class Game {
     if (drunk) { this.player.setPose('auto'); this.player.setPhysicsEnabled(true); }
     this.leaveInteriorImmediate();
     const st = this.state;
-    const bill = Math.min(st.cash, 250);
+    const bill = Math.min(st.cash, SERVICE_PRICES.faintBill);
     st.cash -= bill;
     st.health = st.maxHealth * 0.6;
+    st.changeHappiness(-12, drunk ? 'Coma etilico' : 'Sei svenuto');
     st.stamina = st.maxStamina;
     if (drunk) {
       st.drunk = 0;
@@ -1751,7 +1999,8 @@ export class Game {
   setOutdoorVisible(v) {
     this.world.setVisible(v);
     this.npcs.setVisible(v);
-    for (const veh of this.vehicles.list) veh.mesh.visible = v;
+    this.traffic.setVisible(v);
+    for (const veh of this.vehicles.list) veh.mesh.visible = v && !veh.inGarage;
     this.police.setVisible(v);
     this.vehicles.smoke.setVisible(v);
   }
@@ -1760,24 +2009,45 @@ export class Game {
     if (this.transitioning || this.interior || this.driving) return;
     this.transitioning = true;
     this.hud.hidePrompt();
-    audio.door();
+    if (door.type === 'homegarage') audio.shutter(); else audio.door();
     await fadeTo(1, 0.35, '#000');
     if (this.disposed) return;
+    if (!this.openInterior(door)) {
+      this.transitioning = false;
+      await fadeTo(0, 0.3);
+      this.toast('Questo edificio è chiuso.');
+      return;
+    }
+    const sp = this.interior.spawn;
+    this.player.setPosition(sp.x, 0, sp.z, sp.facing);
+    this.rig.yaw = 0;
+    this.rig.pitch = 0.3;
+    this.rig.targetDist = this.rig.dist = 3.2;
+    await fadeTo(0, 0.45);
+    this.transitioning = false;
+    this.toast(door.name, 1600);
+  }
+
+  /**
+   * Costruisce l'interno di una porta (senza dissolvenze) e ci "sposta" la scena: usato entrando a piedi
+   * e dal garage quando entri guidando. Ritorna false se l'interno non si può costruire.
+   */
+  openInterior(door) {
     try {
       this.interior = new Interior({
         scene: this.scene,
         physics: this.physics,
         staticMaterial: this.world.staticMaterial,
         door,
-        ctx: { familyId: this.family.id, city: this.city, seed: this.seed, houseTier: door.house ? door.house.tier : null },
+        ctx: {
+          familyId: this.family.id, city: this.city, seed: this.seed,
+          houseTier: door.house ? door.house.tier : null, houseId: door.house ? door.house.id : null,
+        },
       });
     } catch (e) {
       console.error('[Game] impossibile costruire l\'interno', e);
       this.interior = null;
-      this.transitioning = false;
-      await fadeTo(0, 0.3);
-      this.toast('Questo edificio è chiuso.');
-      return;
+      return false;
     }
     this.currentDoor = door;
     if (this.convo.isOpen) this.convo.close();
@@ -1786,19 +2056,28 @@ export class Game {
     if (door.type === 'workshop') this.workshop = new Workshop(this, this.interior);
     this.player.aiming = false;
     this.setOutdoorVisible(false);
+    if (door.type === 'homegarage') this.garage.activate();
     this.dayCycle.indoor = true;
-    const sp = this.interior.spawn;
-    this.player.setPosition(sp.x, 0, sp.z, sp.facing);
     this.rig.collidables = this.interior.collidables;
     this.rig.maxDist = 4;
-    this.rig.yaw = 0;
-    this.rig.pitch = 0.3;
-    this.rig.targetDist = this.rig.dist = 3.2;
     this.dayCycle.update(this.hour, this.player.feet);
     this.renderer.compile(this.scene, this.camera);
-    await fadeTo(0, 0.45);
-    this.transitioning = false;
-    this.toast(door.name, 1600);
+    return true;
+  }
+
+  /** Smonta l'interno corrente e riaccende la città, senza spostare il giocatore (uscita in auto dal garage). */
+  closeInterior() {
+    if (!this.interior) return;
+    if (this.garage.inside) this.garage.deactivate();
+    if (this.restaurant) { this.restaurant.dispose(); this.restaurant = null; }
+    if (this.workshop) { this.workshop.dispose(); this.workshop = null; }
+    this.interior.dispose();
+    this.interior = null;
+    this.currentDoor = null;
+    this.setOutdoorVisible(true);
+    this.dayCycle.indoor = false;
+    this.rig.collidables = this.world.collidables;
+    this.rig.maxDist = 10;
   }
 
   async exitBuilding() {
@@ -1881,6 +2160,7 @@ export class Game {
     if (this.action && this.action.onCancel) this.action.onCancel();
     if (this.workshop) { this.workshop.dispose(); this.workshop = null; }
     this.police.dispose();
+    this.traffic.dispose();
     this.renderer.toneMappingExposure = 1; // il menu principale torna all'esposizione neutra
     this.escMenu.close();
     this.tabMenu.close();

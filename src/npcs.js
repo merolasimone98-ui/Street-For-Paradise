@@ -5,6 +5,7 @@ import { makePerson, HumanAnimator, randomLook } from './characters.js';
 import { GROUPS } from './playerstate.js';
 import { disposeObject3D } from './ui.js';
 import { BLOCK, GRID, CELL, HALF, RINGS, districtForRow } from './world.js';
+import { audio } from './audio.js';
 
 const SIDEWALK_Y = 0.2;
 const NAMES_M = ['Marco', 'Luca', 'Ahmed', 'Carlos', 'Kenji', 'Oleg', 'David', 'Samuel', 'Paolo', 'Tom'];
@@ -110,7 +111,9 @@ export class Npc {
     this.body.position.set(this.pos.x, this.pos.y, this.pos.z);
     if (!animate) return; // lontano dal giocatore: si muove ma non si anima (prestazioni)
     this.sync();
-    this.animator.update(dt, { speed: this.speed, grounded: true, state: this.pose === 'auto' ? 'auto' : this.pose });
+    // Reazioni momentanee (clacson, abbaglianti) sopra la camminata
+    const state = this.reactT > 0 && this.reactPose ? this.reactPose : this.pose === 'auto' ? 'auto' : this.pose;
+    this.animator.update(dt, { speed: this.speed, grounded: true, state });
   }
 
   sync() {
@@ -205,7 +208,7 @@ export class NpcManager {
 
   nextLeg(npc) {
     const target = npc.corners[npc.cornerIdx];
-    npc.walkTo([target], npc.baseSpeed, () => {
+    npc.walkTo([target], npc.fleeT > 0 ? 5.4 : npc.baseSpeed, () => {
       npc.cornerIdx = (npc.cornerIdx + 1) % 4;
       this.nextLeg(npc);
     });
@@ -281,14 +284,73 @@ export class NpcManager {
     }
   }
 
+  /**
+   * Panico (furto, rapina, spari): i passanti vicini scappano di corsa lungo il marciapiede,
+   * nella direzione opposta al pericolo, e qualcuno urla.
+   */
+  panic(x, z, radius = 45) {
+    let screams = 0;
+    for (const n of this.pedestrians) {
+      const d = Math.hypot(n.pos.x - x, n.pos.z - z);
+      if (d > radius || n.inConversation) continue;
+      const wasFleeing = n.fleeT > 0;
+      n.fleeT = 8 + Math.random() * 4;
+      n.reactT = 0;
+      if (n.savedPath) { n.savedPath = null; }
+      // Se l'angolo verso cui cammina è più vicino al pericolo, inverte il giro dell'isolato
+      const next = n.corners[n.cornerIdx];
+      if (Math.hypot(next.x - x, next.z - z) < d) {
+        n.corners = n.corners.slice().reverse();
+        n.cornerIdx = (n.corners.length - 1 - n.cornerIdx + 1) % n.corners.length;
+      }
+      this.nextLeg(n);
+      if (!wasFleeing && screams < 2 && d < 30) {
+        screams++;
+        setTimeout(() => audio.scream(n.look && n.look.sex === 'f'), Math.random() * 400);
+      }
+    }
+  }
+
+  /** Clacson: chi è vicino sobbalza e si gira verso il rumore. */
+  startle(x, z, radius = 22) {
+    for (const n of this.pedestrians) {
+      if (n.fleeT > 0 || n.inConversation) continue;
+      if (Math.hypot(n.pos.x - x, n.pos.z - z) > radius) continue;
+      n.reactT = 1.3;
+      n.reactPose = 'startle';
+      n.reactLook = { x, z };
+    }
+  }
+
+  /** Abbaglianti puntati addosso: si coprono gli occhi. */
+  dazzle(x, z, heading, range = 45) {
+    const fx = Math.sin(heading), fz = Math.cos(heading);
+    for (const n of this.pedestrians) {
+      if (n.fleeT > 0 || n.reactT > 0) continue;
+      const dx = n.pos.x - x, dz = n.pos.z - z;
+      const d = Math.hypot(dx, dz);
+      if (d > range || d < 2) continue;
+      if ((dx * fx + dz * fz) / d < 0.95) continue;
+      n.reactT = 2.2;
+      n.reactPose = 'shield';
+      n.reactLook = { x, z };
+    }
+  }
+
   update(dt, playerFeet) {
     if (!this.visible) return;
     for (const n of this.pedestrians) {
       const d = n.pos.distanceTo(playerFeet);
-      // Si ferma se il giocatore gli è proprio davanti, poi riprende
-      if (d < 1.4 || n.inConversation) {
+      if (n.fleeT > 0) {
+        n.fleeT -= dt;
+        if (n.fleeT <= 0 && n.path) n.walkSpeed = n.baseSpeed; // si calma e torna a camminare
+      }
+      if (n.reactT > 0) n.reactT -= dt;
+      const reacting = n.reactT > 0 && n.fleeT <= 0;
+      // Si ferma se il giocatore gli è proprio davanti (o reagisce a clacson/fari), poi riprende
+      if ((d < 1.4 && !(n.fleeT > 0)) || n.inConversation || reacting) {
         if (n.path) { n.savedPath = { path: n.path, idx: n.pathIdx, cb: n.onArrive }; n.path = null; }
-        n.lookTarget = playerFeet;
+        n.lookTarget = reacting && n.reactLook ? n.reactLook : playerFeet;
       } else if (!n.path && n.savedPath) {
         n.path = n.savedPath.path; n.pathIdx = n.savedPath.idx; n.onArrive = n.savedPath.cb; n.savedPath = null;
         n.lookTarget = null;

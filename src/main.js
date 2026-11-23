@@ -9,8 +9,11 @@ import { $, fadeTo, setFade } from './ui.js';
 import { audio } from './audio.js';
 import { loadSettings, pixelRatioFor } from './settings.js';
 import { models } from './models.js';
+import { initI18n } from './i18n.js';
 
 window.__SFP_BOOTED = true;
+// Lingua (IT/EN): traduzione automatica di tutta l'interfaccia, prima di mostrare qualsiasi schermata
+initI18n();
 
 // Errori asincroni non gestiti: li registriamo senza bloccare il gioco.
 window.addEventListener('unhandledrejection', (e) => {

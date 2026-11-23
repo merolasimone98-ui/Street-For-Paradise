@@ -1,9 +1,10 @@
 // Menu principale: GIOCA -> (NEW GAME -> scelta Uomo/Donna) / CONTINUA GAME, e IMPOSTAZIONI (volumi e FOV).
 import { SaveSystem } from './save.js';
 import { getCity, formatMoney } from './birthdata.js';
-import { settingsFormHtml, bindSettingsForm, loadSettings } from './settings.js';
+import { settingsFormHtml, bindSettingsForm, loadSettings, setSetting, onSettingsChange } from './settings.js';
 import { audio, bindUiSounds } from './audio.js';
 import { $, confirmDialog, isModalOpen } from './ui.js';
+import { LANGUAGES, getLanguage } from './i18n.js';
 
 export class Menu {
   /**
@@ -21,6 +22,9 @@ export class Menu {
     this.btnContinue = $('btn-continue');
     this.continueSub = $('continue-sub');
     this.settingsPanel = $('menu-settings');
+    this.creditsPanel = $('menu-credits');
+    this.btnCredits = $('btn-credits');
+    this.btnLang = $('btn-lang');
     this.gender = $('gender-screen');
 
     this.active = false;
@@ -29,9 +33,21 @@ export class Menu {
 
     bindUiSounds(this.root);
     bindUiSounds(this.settingsPanel);
+    bindUiSounds(this.creditsPanel);
     bindUiSounds(this.gender);
     this.btnPlay.addEventListener('click', () => this.toggleOptions());
     this.btnSettings.addEventListener('click', () => this.openSettings());
+    this.btnCredits.addEventListener('click', () => this.openCredits());
+    this.creditsPanel.addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === this.creditsPanel) this.closeCredits(); });
+    // Lingua: il pulsante in alto a destra passa da Italiano a Inglese e viceversa (tutto il gioco si traduce subito)
+    this.btnLang.addEventListener('click', () => {
+      const codes = Object.keys(LANGUAGES);
+      const next = codes[(codes.indexOf(getLanguage()) + 1) % codes.length];
+      setSetting('lang', next);
+      audio.click();
+    });
+    this.updateLangButton();
+    onSettingsChange(() => { this.updateLangButton(); if (this.active) this.refresh(); });
     this.btnNew.addEventListener('click', () => this.handleNew());
     this.btnContinue.addEventListener('click', () => this.handleContinue());
     this.settingsPanel.addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === this.settingsPanel) this.closeSettings(); });
@@ -44,10 +60,28 @@ export class Menu {
     window.addEventListener('keydown', this._onKey);
   }
 
+  updateLangButton() {
+    const l = LANGUAGES[getLanguage()] || LANGUAGES.it;
+    $('lang-flag').innerHTML = l.flag;
+    $('lang-name').textContent = l.label;
+  }
+
+  openCredits() {
+    this.creditsPanel.classList.remove('hidden');
+  }
+
+  closeCredits() {
+    this.creditsPanel.classList.add('hidden');
+  }
+
   onKey(e) {
     if (!this.active || this.busy || isModalOpen()) return;
     if (!this.settingsPanel.classList.contains('hidden')) {
       if (e.code === 'Escape') this.closeSettings();
+      return;
+    }
+    if (!this.creditsPanel.classList.contains('hidden')) {
+      if (e.code === 'Escape') this.closeCredits();
       return;
     }
     if (!this.gender.classList.contains('hidden')) {
@@ -72,8 +106,9 @@ export class Menu {
       const c = save.character;
       const city = getCity(c.cityId);
       const date = new Date(save.savedAt || Date.now());
-      const when = date.toLocaleDateString('it-IT', { day: '2-digit', month: 'short' }) + ' ' +
-        date.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+      const loc = getLanguage() === 'en' ? 'en-GB' : 'it-IT';
+      const when = date.toLocaleDateString(loc, { day: '2-digit', month: 'short' }) + ' ' +
+        date.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
       this.continueSub.textContent = `${c.name} ${c.surname} · ${save.age} anni · ${city.city} · ${formatMoney(save.money)} · ${when}`;
     } else {
       this.continueSub.textContent = 'Nessun salvataggio trovato';
@@ -171,6 +206,7 @@ export class Menu {
     this.active = false;
     this.root.classList.remove('visible');
     this.closeSettings();
+    this.closeCredits();
     if (document.activeElement && this.root.contains(document.activeElement)) document.activeElement.blur();
     return new Promise((resolve) => {
       setTimeout(() => {

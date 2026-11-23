@@ -47,6 +47,37 @@ export class PlayerState {
     this.jobs = { mechanic: false, repairs: 0, earned: 0, ...(s.jobs || {}) };
     this.stats.robberies = this.stats.robberies || 0;
     this.stats.shots = this.stats.shots || 0;
+    // Felicità 0-100: sale con cibo buono e attività piacevoli, scende con eventi negativi o tristi
+    this.happiness = clamp(s.happiness ?? 60, 0, 100);
+    this.happyLog = Array.isArray(s.happyLog) ? s.happyLog.slice(0, 8) : [];
+    // Il telefono è un oggetto dell'inventario: si apre solo cliccandolo nel menu TAB
+    if (!this.has('telefono')) this.inventory.unshift({ id: 'telefono', qty: 1 });
+  }
+
+  /** Varia la Felicità (0-100) e ne tiene un breve registro. */
+  changeHappiness(delta, reason = '') {
+    const before = this.happiness;
+    this.happiness = clamp(this.happiness + delta, 0, 100);
+    const real = this.happiness - before;
+    if (reason && Math.abs(real) >= 0.5) {
+      this.happyLog.unshift({ delta: Math.round(real * 10) / 10, reason });
+      this.happyLog = this.happyLog.slice(0, 8);
+    }
+    return real;
+  }
+
+  happinessTitle() {
+    const h = this.happiness;
+    if (h >= 85) return 'Al settimo cielo';
+    if (h >= 65) return 'Felice';
+    if (h >= 45) return 'Sereno';
+    if (h >= 25) return 'Giù di morale';
+    return 'Triste';
+  }
+
+  happinessIcon() {
+    const h = this.happiness;
+    return h >= 85 ? '😄' : h >= 65 ? '🙂' : h >= 45 ? '😐' : h >= 25 ? '🙁' : '😢';
   }
 
   serialize() {
@@ -57,7 +88,7 @@ export class PlayerState {
       stats: this.stats, daily: this.daily, homelessGifts: this.homelessGifts,
       auraLevel: this.auraLevel, rewardsClaimed: this.rewardsClaimed, lastChurchDay: this.lastChurchDay,
       lastChurchPenaltyDay: this.lastChurchPenaltyDay, drunk: Math.round(this.drunk), houses: this.houses,
-      jobs: this.jobs,
+      jobs: this.jobs, happiness: Math.round(this.happiness * 10) / 10, happyLog: this.happyLog,
     };
   }
 
@@ -90,6 +121,7 @@ export class PlayerState {
       if (!this.wardrobe.includes(this.outfit.shoes)) this.wardrobe.push(this.outfit.shoes);
       return true;
     }
+    if (id === 'telefono') return false; // il telefono non si consuma né si regala
     const it = this.inventory.find((i) => i.id === id);
     if (!it || it.qty < qty) return false;
     it.qty -= qty;
@@ -148,6 +180,9 @@ export class PlayerState {
     this.aura = clamp(next, 1, 100);
     if (delta > 0) this.stats.goodDeeds++;
     else if (delta < 0) this.stats.badDeeds++;
+    // Fare del bene rende sereni; i peccati lasciano un po' di amarezza
+    if (delta > 0) this.changeHappiness(Math.min(3, delta * 0.6));
+    else if (delta < 0) this.changeHappiness(Math.max(-4, delta * 0.35));
     this.auraLog.unshift({ delta: Math.round(delta * 10) / 10, reason, t: Date.now() });
     this.auraLog = this.auraLog.slice(0, 12);
     return this.aura - before;

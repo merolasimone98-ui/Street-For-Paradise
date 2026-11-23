@@ -219,6 +219,7 @@ export class Player {
     this.animator.update(dt, {
       speed: this.pose === 'auto' && !this.workState ? this.speed : 0, grounded: this.grounded || this.pose !== 'auto',
       state, drinkT: this.drinkT || 0, lean: this.rideLean || 0,
+      pedal: this.pose === 'ride' && this.pedalPhase != null ? this.pedalPhase : null,
     });
   }
 

@@ -12,6 +12,9 @@ export const DEFAULT_SETTINGS = {
   shadows: 'high', // 'high' | 'low' | 'off'
   quality: 'high', // 'high' | 'medium' | 'low' (pixel ratio)
   showMinimap: true,
+  lang: 'it', // 'it' | 'en'
+  gearbox: 'auto', // 'auto' | 'manual' (E marcia su, Q marcia giù)
+  speedUnit: 'kmh', // 'kmh' | 'mph'
 };
 
 let cache = null;
@@ -70,7 +73,12 @@ export function settingsFormHtml(s, { full = true } = {}) {
     <label class="set-row"><span>Inverti asse Y</span><input type="checkbox" ${s.invertY ? 'checked' : ''} data-set="invertY"><b></b></label>
     <label class="set-row"><span>Ombre</span><select data-set="shadows">${[['high', 'Alte'], ['low', 'Basse'], ['off', 'Disattivate']].map(([v, l]) => `<option value="${v}" ${s.shadows === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>
     <label class="set-row"><span>Qualità grafica</span><select data-set="quality">${[['high', 'Alta'], ['medium', 'Media'], ['low', 'Bassa']].map(([v, l]) => `<option value="${v}" ${s.quality === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>
-    <label class="set-row"><span>Minimappa</span><input type="checkbox" ${s.showMinimap ? 'checked' : ''} data-set="showMinimap"><b></b></label>`;
+    <label class="set-row"><span>Minimappa</span><input type="checkbox" ${s.showMinimap ? 'checked' : ''} data-set="showMinimap"><b></b></label>
+    <div class="set-group">Guida</div>
+    <label class="set-row"><span>Cambio</span><select data-set="gearbox">${[['auto', 'Automatico'], ['manual', 'Manuale (E marcia su · Q marcia giù)']].map(([v, l]) => `<option value="${v}" ${s.gearbox === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>
+    <label class="set-row"><span>Tachimetro</span><select data-set="speedUnit">${[['kmh', 'km/h'], ['mph', 'mph']].map(([v, l]) => `<option value="${v}" ${s.speedUnit === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>
+    <div class="set-group">Lingua</div>
+    <label class="set-row"><span>Lingua</span><select data-set="lang">${[['it', 'Italiano'], ['en', 'English']].map(([v, l]) => `<option value="${v}" ${s.lang === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>`;
   }
   html += '<p class="muted">Le impostazioni vengono salvate automaticamente su questo browser.</p></div>';
   return html;

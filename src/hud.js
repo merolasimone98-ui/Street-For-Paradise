@@ -26,6 +26,9 @@ export class HUD {
       levelBox: $('hud-aura-box'), drunkBox: $('hud-drunk'), drunkBar: $('hud-drunk-bar'), drunkV: $('hud-drunk-v'),
       date: $('hud-date'),
       wanted: $('hud-wanted'), crosshair: $('crosshair'), vehBar: $('hud-veh-bar'), vehV: $('hud-veh-v'),
+      happyBox: $('hud-happy'), happyBar: $('hud-happy-bar'), happyV: $('hud-happy-v'), happyIco: $('hud-happy-ico'),
+      speedUnit: $('hud-speed-unit'), gear: $('hud-gear'), gearV: $('hud-gear-v'), gearMode: $('hud-gear-mode'), rpm: $('hud-rpm'),
+      balance: $('hud-balance'), balanceLabel: $('hud-balance-label'), balanceNeedle: $('hud-balance-needle'), beam: $('hud-beam'),
     };
     this.wantedKey = '';
     this.levelTimer = null;
@@ -57,6 +60,13 @@ export class HUD {
       g.fillStyle = DISTRICT_COLORS[b.district] || '#888';
       g.fillRect(tx(b.x - b.w / 2), tx(b.z - b.d / 2), b.w * MAP_PPM, b.d * MAP_PPM);
     }
+    const plaza = this.world.mapData.plaza;
+    if (plaza) {
+      g.fillStyle = '#23262b';
+      g.fillRect(tx(plaza.x - 7), tx(plaza.z + plaza.half), 14 * MAP_PPM, (plaza.roadZ0 - plaza.z - plaza.half) * MAP_PPM);
+      g.fillStyle = '#b9ad97';
+      g.fillRect(tx(plaza.x - plaza.half), tx(plaza.z - plaza.half), plaza.half * 2 * MAP_PPM, plaza.half * 2 * MAP_PPM);
+    }
     const icon = (x, z, type, r = 9) => {
       const ic = MAP_ICONS[type];
       if (!ic) return;
@@ -75,6 +85,7 @@ export class HUD {
     };
     for (const a of this.world.atms) icon(a.mx, a.mz, 'atm', 6);
     for (const d of this.world.mapData.doors) icon(d.x, d.z + d.nz * 3, d.type, d.type === 'home' ? 11 : 9);
+    for (const l of this.world.mapData.landmarks || []) icon(l.x, l.z, l.type, 14);
     this.mapImage = c;
   }
 
@@ -96,6 +107,7 @@ export class HUD {
 
   setMinimapVisible(v) {
     this.el.minimap.classList.toggle('hidden', !v);
+    this.root.classList.toggle('no-minimap', !v); // la barra Felicità scende al posto della minimappa
   }
 
   show() { this.root.classList.remove('hidden'); }
@@ -232,11 +244,38 @@ export class HUD {
       [...this.el.wanted.children].forEach((c, i) => c.classList.toggle('on', i < (s.stars || 0)));
     }
     this.el.crosshair.classList.toggle('hidden', !s.crosshair);
-    // Tachimetro e salute del veicolo
+    // Equilibrio in impennata / stoppie (la lancetta va tenuta nella zona verde)
+    const bal = s.balance;
+    const balOn = !!(bal && (bal.wheelie > 0.03 || bal.stoppie > 0.03));
+    this.el.balance.classList.toggle('hidden', !balOn);
+    if (balOn) {
+      const wheelie = bal.wheelie >= bal.stoppie;
+      const k = Math.min(1, wheelie ? bal.wheelie / bal.wLimit : bal.stoppie / bal.sLimit);
+      this.setText('balanceLabel', wheelie ? 'IMPENNATA' : 'STOPPIE');
+      this.el.balanceNeedle.style.left = `${(k * 100).toFixed(1)}%`;
+      this.el.balance.classList.toggle('danger', k > 0.82);
+    }
+    this.el.beam.classList.toggle('hidden', !s.highBeam);
+    // Felicità (sopra la minimappa)
+    const hap = Math.max(0, Math.min(100, s.happiness ?? 60));
+    this.el.happyBar.style.transform = `scaleX(${hap / 100})`;
+    const hapCls = hap < 25 ? 'sad' : hap < 45 ? 'low' : '';
+    if (this.last.hapCls !== hapCls) { this.last.hapCls = hapCls; this.el.happyBox.className = `hud-happy ${hapCls}`; }
+    // Tachimetro (km/h o mph), marcia/regime e salute del veicolo
     if (s.vehicle) {
       this.el.speed.classList.remove('hidden');
-      this.setText('speedV', String(Math.round(Math.abs(s.vehicle.speed) * 3.6)));
+      const mph = s.speedUnit === 'mph';
+      this.setText('speedV', String(Math.round(Math.abs(s.vehicle.speed) * (mph ? 2.23694 : 3.6))));
+      this.setText('speedUnit', mph ? 'mph' : 'km/h');
       this.setText('speedName', s.vehicle.name);
+      const gl = s.vehicle.gearLabel;
+      this.el.gear.classList.toggle('hidden', !gl);
+      if (gl) {
+        this.setText('gearV', gl);
+        this.setText('gearMode', s.vehicle.manual ? 'MAN' : 'AUTO');
+        this.el.rpm.style.transform = `scaleX(${Math.max(0.04, s.vehicle.rpm || 0)})`;
+        this.el.rpm.classList.toggle('red', (s.vehicle.rpm || 0) > 0.93);
+      }
       const vh = s.vehicleHealth ?? 100;
       this.el.vehBar.style.transform = `scaleX(${Math.max(0, vh / 100)})`;
       this.el.vehBar.className = vh < 25 ? 'crit' : vh < 55 ? 'low' : '';
@@ -260,6 +299,8 @@ export class HUD {
       this.setText('aura', `${Math.round(s.aura)}%`);
       this.setText('level', String(s.auraLevel || 0));
       this.setText('drunkV', `${Math.round(s.drunk || 0)}%`);
+      this.setText('happyV', `${Math.round(hap)}%`);
+      this.setText('happyIco', s.happyIcon || '🙂');
       if (s.date) {
         this.setText('date', s.date);
         this.el.date.classList.toggle('red', !!s.redDay);

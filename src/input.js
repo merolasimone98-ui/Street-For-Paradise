@@ -1,6 +1,7 @@
 // Input di gioco: tastiera, movimento del mouse (Pointer Lock) e rotella.
 
-const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight', 'Tab']);
+// CTRL sinistro (stoppie) incluso: si blocca la scorciatoia del browser Ctrl+S mentre si frena
+const GAME_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight', 'Tab', 'ControlLeft', 'KeyH', 'KeyT', 'KeyR']);
 
 export class Input {
   constructor() {
@@ -13,7 +14,7 @@ export class Input {
 
     this._down = (e) => {
       if (!this.enabled) return;
-      if (GAME_KEYS.has(e.code)) e.preventDefault();
+      if (GAME_KEYS.has(e.code) || (e.ctrlKey && document.pointerLockElement)) e.preventDefault();
       if (!e.repeat) this.pressed.add(e.code);
       this.keys.add(e.code);
     };

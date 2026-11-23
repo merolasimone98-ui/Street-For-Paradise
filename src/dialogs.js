@@ -1,5 +1,5 @@
 // Finestre di dialogo del gameplay: negozi, concessionario, banca, ATM, menù ristorante, scontrino, donazioni, guardaroba.
-import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, DRINKS, itemInfo } from './items.js';
+import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, DRINKS, TUNING, VEHICLE_DELIVERY_FEE, itemInfo } from './items.js';
 import { calendarHtml, dayInfo, formatDate, MONTHS_IT } from './calendar.js';
 import { formatMoney } from './birthdata.js';
 import { $ } from './ui.js';
@@ -204,7 +204,7 @@ export class Dialogs {
 
   /* ---------- Concessionario ---------- */
   dealer(delivery = false) {
-    const fee = delivery ? 150 : 0;
+    const fee = delivery ? VEHICLE_DELIVERY_FEE : 0;
     const render = (selected = {}) => {
       const rows = Object.entries(VEHICLE_MODELS).filter(([, m]) => !m.hidden).map(([id, m]) => {
         const color = selected[id] ?? m.colors[0];
@@ -216,7 +216,9 @@ export class Dialogs {
       }).join('');
       this.show({
         title: delivery ? 'Concessionario · ordine telefonico' : 'Concessionario',
-        subtitle: delivery ? 'Consegna a domicilio vicino a te (+€ 150).' : 'Auto, moto, motorini e bici. Il veicolo ti aspetta in strada davanti al salone.',
+        subtitle: delivery
+          ? `Consegna nel garage di casa (+${formatMoney(fee)}). Box liberi: ${this.game.garage.capacity - this.game.garage.vehicles().length}/${this.game.garage.capacity}.`
+          : `Auto, moto, motorini e bici. Il veicolo viene consegnato nel garage di casa (box liberi: ${this.game.garage.capacity - this.game.garage.vehicles().length}/${this.game.garage.capacity}).`,
         wide: true,
         body: this.payToggleHtml() + `<div class="shop-list">${rows}</div>`,
         handlers: {
@@ -228,6 +230,141 @@ export class Dialogs {
             audio.cash();
             this.close();
             this.game.onPurchaseVehicle(d.id, Number(d.c), delivery);
+          },
+        },
+      });
+    };
+    render();
+  }
+
+  /* ---------- Garage di casa: officina tuning ---------- */
+  /** Computer del garage: elenco dei veicoli nei box da modificare. */
+  tuningGarage() {
+    const g = this.game;
+    const list = g.garage.vehicles();
+    const icon = (k) => ({ bike: '🚲', scooter: '🛵', moto: '🏍️' }[k] || '🚗');
+    const rows = list.map((v) => `<div class="shop-row">
+        <div class="shop-icon">${icon(v.kind)}</div>
+        <div class="shop-info"><b>${esc(v.name)}</b><span>Box ${v.bay + 1} · Condizioni ${Math.round(v.health)}% · Motore stage ${v.tune.engine || 0}</span></div>
+        <button class="btn-solid small" data-act="pick" data-uid="${v.uid}">Modifica</button>
+      </div>`).join('') || '<p class="muted">Il garage è vuoto: compra un veicolo al concessionario (viene consegnato qui) oppure entra guidando dalla serranda.</p>';
+    this.show({
+      title: 'Officina tuning · garage di casa',
+      subtitle: `Box occupati: ${list.length}/${g.garage.capacity}. Vernice, cerchi, vetri, assetto, neon, motore e freni.`,
+      wide: true,
+      body: `<div class="shop-list">${rows}</div>`,
+      handlers: {
+        pick: (d) => {
+          const v = list.find((x) => x.uid === d.uid);
+          if (v) this.tuning(v);
+        },
+      },
+    });
+  }
+
+  /** Modifiche estetiche e meccaniche di un veicolo (prezzi proporzionati al valore del mezzo). */
+  tuning(v) {
+    const g = this.game;
+    const s = g.state;
+    const base = VEHICLE_MODELS[v.model] ? VEHICLE_MODELS[v.model].price : 20000;
+    const factor = Math.max(0.25, Math.min(2.6, Math.sqrt(base / 33500)));
+    const price = (k) => Math.max(20, Math.round((TUNING.cost[k] * factor) / 10) * 10);
+    const car = !v.spec.ride;
+    const motor = v.kind !== 'bike';
+    const kmh = (ms) => Math.round(ms * 3.6);
+    const fail = () => render('<p class="warn">Fondi insufficienti per questa modifica.</p>');
+    const apply = (cost, label) => {
+      if (cost > 0 && !s.payWith(cost, this.payMethod)) return false;
+      v.applyTune();
+      audio.impactWrench();
+      if (cost > 0) {
+        audio.cash();
+        s.changeHappiness(3, `Tuning: ${label}`);
+      }
+      s.vehicles = g.vehicles.serializeOwned();
+      render(`<p class="ok">${esc(label)}: fatto!</p>`);
+      this.refreshWallet();
+      return true;
+    };
+    const render = (msg = '') => {
+      const t = v.tune;
+      const chip = (on, act, data, label, cost) => `<button class="chip ${on ? 'on' : ''}" data-act="${act}" ${data}>${label}${cost && !on ? ` · ${formatMoney(cost)}` : ''}</button>`;
+      let body = `${this.payToggleHtml()}${msg}
+        <div class="tune-stats">
+          <span>Velocità max <b>${kmh(v.spec.maxSpeed)} km/h</b></span>
+          <span>Accelerazione <b>${v.spec.accel.toFixed(1)}</b></span>
+          <span>Freni <b>${v.spec.brake.toFixed(1)}</b></span>
+          <span>Condizioni <b>${Math.round(v.health)}%</b></span>
+        </div>
+        <div class="shop-section">Vernice · ${formatMoney(price('paint'))}</div>
+        <div class="chips">${TUNING.paints.map((c) => `<button class="dot ${c === v.color ? 'on' : ''}" style="background:${hex(c)}" data-act="paint" data-c="${c}" title="Vernice"></button>`).join('')}</div>
+        <div class="shop-section">Cerchi · ${formatMoney(price('rims'))}</div>
+        <div class="chips">${TUNING.rims.map(([c, l]) => chip((t.rims ?? null) === c, 'rims', `data-c="${c ?? ''}"`, esc(l), c === null ? 0 : price('rims'))).join('')}</div>`;
+      if (car) {
+        body += `<div class="shop-section">Carrozzeria</div>
+          <div class="chips">
+            ${chip(t.tint, 'tint', '', 'Vetri oscurati', price('tint'))}
+            ${chip(t.lowered, 'lower', '', 'Assetto ribassato (+ maneggevolezza)', price('lowered'))}
+          </div>
+          <div class="shop-section">Neon sottoscocca · ${formatMoney(price('neon'))}</div>
+          <div class="chips">${TUNING.neons.map(([c, l]) => chip((t.neon ?? null) === c, 'neon', `data-c="${c ?? ''}"`, esc(l), c === null ? 0 : price('neon'))).join('')}</div>`;
+      }
+      if (motor) {
+        body += `<div class="shop-section">Meccanica</div>
+          <div class="chips">
+            ${chip((t.engine || 0) >= 1, 'engine', 'data-s="1"', 'Motore stage 1 (+8% velocità, +14% accelerazione)', price('engine1'))}
+            ${chip((t.engine || 0) >= 2, 'engine', 'data-s="2"', 'Motore stage 2 (+17% velocità, +30% accelerazione)', price('engine2'))}
+            ${chip(t.brakes, 'brakes', '', 'Freni sportivi (+22%)', price('brakes'))}
+          </div>`;
+      }
+      this.show({
+        title: `Tuning · ${v.name}`,
+        subtitle: 'Le modifiche si vedono subito sul veicolo nel box e vengono salvate.',
+        wide: true,
+        body,
+        handlers: {
+          pay: (d) => { this.payMethod = d.m; render(); },
+          paint: (d) => {
+            const c = Number(d.c);
+            if (c === v.color) return;
+            const old = v.color;
+            v.color = c;
+            if (!apply(price('paint'), 'Riverniciatura')) { v.color = old; v.applyTune(); fail(); }
+          },
+          rims: (d) => {
+            const c = d.c === '' ? null : Number(d.c);
+            if ((v.tune.rims ?? null) === c) return;
+            const old = v.tune.rims;
+            v.tune.rims = c;
+            if (!apply(c === null ? 0 : price('rims'), 'Cerchi')) { v.tune.rims = old; v.applyTune(); fail(); }
+          },
+          tint: () => {
+            v.tune.tint = !v.tune.tint;
+            if (!apply(v.tune.tint ? price('tint') : 0, 'Vetri')) { v.tune.tint = false; v.applyTune(); fail(); }
+          },
+          lower: () => {
+            v.tune.lowered = !v.tune.lowered;
+            if (!apply(v.tune.lowered ? price('lowered') : 0, 'Assetto')) { v.tune.lowered = false; v.applyTune(); fail(); }
+          },
+          neon: (d) => {
+            const c = d.c === '' ? null : Number(d.c);
+            if ((v.tune.neon ?? null) === c) return;
+            const old = v.tune.neon;
+            v.tune.neon = c;
+            if (!apply(c === null ? 0 : price('neon'), 'Neon')) { v.tune.neon = old; v.applyTune(); fail(); }
+          },
+          engine: (d) => {
+            const stage = Number(d.s);
+            if ((v.tune.engine || 0) >= stage) return;
+            const cost = stage === 2 ? price('engine2') + ((v.tune.engine || 0) < 1 ? price('engine1') : 0) : price('engine1');
+            const old = v.tune.engine || 0;
+            v.tune.engine = stage;
+            if (!apply(cost, `Motore stage ${stage}`)) { v.tune.engine = old; v.applyTune(); fail(); }
+          },
+          brakes: () => {
+            if (v.tune.brakes) return;
+            v.tune.brakes = true;
+            if (!apply(price('brakes'), 'Freni sportivi')) { v.tune.brakes = false; v.applyTune(); fail(); }
           },
         },
       });
@@ -489,7 +626,7 @@ export class Dialogs {
   donate(npc) {
     const s = this.game.state;
     const render = (msg = '') => {
-      const giftable = s.inventory.filter((i) => ['cibo', 'medicinali', 'varie'].includes(itemInfo(i.id).cat));
+      const giftable = s.inventory.filter((i) => i.id !== 'telefono' && ['cibo', 'medicinali', 'varie'].includes(itemInfo(i.id).cat));
       const clothes = s.wardrobe.filter((id) => !Object.values(s.outfit).includes(id));
       const vehicles = this.game.ownedVehicles();
       this.show({

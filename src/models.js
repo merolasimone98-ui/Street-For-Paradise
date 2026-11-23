@@ -151,6 +151,7 @@ class ModelLibrary {
           if (!cloned.has(m)) {
             const p = m.clone();
             p.userData.sharedAsset = false;
+            p.userData.paint = true; // il tuning del garage può ridipingerlo
             p.color.setHex(color);
             if (p.isMeshPhysicalMaterial) { p.clearcoat = Math.max(p.clearcoat, 1); p.clearcoatRoughness = Math.min(p.clearcoatRoughness, 0.05); }
             cloned.set(m, p);

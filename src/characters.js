@@ -452,9 +452,12 @@ export class HumanAnimator {
     this.time = Math.random() * 10;
     this.cur = {};
     this.tgt = {};
-    for (const k of POSE_KEYS) { this.cur[k] = 0; this.tgt[k] = 0; }
+    this.vel = {};
+    for (const k of POSE_KEYS) { this.cur[k] = 0; this.tgt[k] = 0; this.vel[k] = 0; }
     this.cur.hipsY = this.tgt.hipsY = 0.95;
     this.female = !!person.userData.female;
+    this.sSpeed = 0; // velocità filtrata: passaggi fluidi tra fermo, camminata e corsa
+    this.airT = 0;
   }
 
   /**
@@ -462,8 +465,13 @@ export class HumanAnimator {
    * @param {{ speed?: number, grounded?: boolean, state?: string, look?: number, drinkT?: number }} s
    *   state: 'auto' (idle/walk/run in base alla velocità) | 'sit' | 'lie' | 'phone' | 'ride' | 'jump' | 'drink'
    */
-  update(dt, { speed = 0, grounded = true, state = 'auto', look = 0, drinkT = 0, lean = 0 } = {}) {
+  update(dt, { speed = 0, grounded = true, state = 'auto', look = 0, drinkT = 0, lean = 0, pedal = null } = {}) {
     this.time += dt;
+    // Velocità filtrata (niente scatti quando un NPC si ferma o riparte) e tempo in aria (salti brevi più morbidi)
+    this.sSpeed += (speed - this.sSpeed) * (1 - Math.exp(-9 * dt));
+    speed = this.sSpeed;
+    this.airT = grounded ? 0 : this.airT + dt;
+    if (!grounded && this.airT < 0.12 && state === 'auto') grounded = true;
     const t = this.tgt;
     for (const k of POSE_KEYS) t[k] = 0;
     t.hipsY = 0.95;
@@ -500,6 +508,19 @@ export class HumanAnimator {
       t.foreL = -0.35 - Math.max(0, -lean) * 0.4;
       t.foreR = -0.35 - Math.max(0, lean) * 0.4;
       rate = 10;
+      if (pedal !== null) {
+        // Bicicletta: le gambe spingono sui pedali (pedivelle opposte, piedi che seguono il pedale)
+        const a = pedal;
+        t.thighL = -0.95 + Math.sin(a) * 0.42;
+        t.thighR = -0.95 + Math.sin(a + Math.PI) * 0.42;
+        t.shinL = 1.05 + Math.cos(a) * 0.42 + 0.1;
+        t.shinR = 1.05 + Math.cos(a + Math.PI) * 0.42 + 0.1;
+        t.footL = -0.25 + Math.sin(a + 0.6) * 0.22;
+        t.footR = -0.25 + Math.sin(a + Math.PI + 0.6) * 0.22;
+        t.hipsRoll += Math.sin(a) * 0.04;
+        t.spineX = 0.42 + Math.abs(lean) * 0.2;
+        rate = 26; // segue la pedalata senza ritardo
+      }
     } else if (state === 'under') {
       // Sdraiato sotto l'auto (la posa 'lie' ruota il corpo a pancia in su): braccia alzate che lavorano
       t.armLx = -1.45 + Math.sin(this.time * 9) * 0.12;
@@ -591,6 +612,19 @@ export class HumanAnimator {
       t.spineY = 0.12; t.headY = -0.1; t.headX = 0.02;
       rate = 18;
     }
+    if (state === 'shield') {
+      // Abbagliato dai fari: si copre gli occhi con il braccio e gira la testa
+      t.armRx = -1.75; t.armRz = 0.35; t.foreR = -1.5; t.handR = 0.3;
+      t.headX = 0.25; t.headY = 0.45;
+      rate = 14;
+    }
+    if (state === 'startle') {
+      // Spaventato dal clacson: sobbalzo, braccia aperte, sguardo verso il rumore
+      t.armLz = -0.55; t.armRz = 0.55; t.armLx = -0.4; t.armRx = -0.4;
+      t.foreL = t.foreR = -0.8;
+      t.spineX = -0.12; t.hipsY = 0.97;
+      rate = 18;
+    }
     if (state === 'give') {
       // Porge le chiavi / i soldi
       t.armRx = -1.15; t.armRz = 0.1; t.foreR = -0.25; t.handR = 0.2;
@@ -607,8 +641,21 @@ export class HumanAnimator {
       rate = 10;
     }
 
-    const kk = 1 - Math.exp(-rate * dt);
-    for (const key of POSE_KEYS) this.cur[key] += (t[key] - this.cur[key]) * kk;
+    // Molla smorzata criticamente: le pose si raggiungono con accelerazione e frenata naturali
+    // (nessuno scatto quando cambia lo stato), stabile anche con dt variabile.
+    const w = rate * 1.6; // abbastanza rigida da non smorzare l'ampiezza della corsa
+    const steps = Math.max(1, Math.ceil((dt * w) / 0.7));
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      for (const key of POSE_KEYS) {
+        const x = this.cur[key] - t[key];
+        const v = this.vel[key];
+        const a = -w * w * x - 2 * w * v;
+        const nv = v + a * h;
+        this.vel[key] = nv;
+        this.cur[key] += nv * h;
+      }
+    }
     this.apply();
   }
 

@@ -7,6 +7,7 @@ import { settingsFormHtml, bindSettingsForm, loadSettings } from './settings.js'
 import { audio, bindUiSounds } from './audio.js';
 import { $, confirmDialog } from './ui.js';
 import { rewardFor, levelTitle, MAX_AURA_LEVEL, PARADISE_LEVEL, PARADISE_PREVIEW_LEVEL } from './aura.js';
+import { tr } from './i18n.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const EXT = WORLD_EXT;
@@ -100,7 +101,7 @@ export class EscMenu {
 
   renderMap(page) {
     page.innerHTML = `<div class="map-wrap"><canvas id="big-map" width="900" height="900"></canvas>
-      <div class="map-legend">${Object.entries(MAP_ICONS).map(([k, v]) => `<span><i style="background:${v.color}">${esc(v.letter)}</i>${esc(k === 'atm' ? 'Bancomat' : (BUILDING_TYPES[k] ? BUILDING_TYPES[k].name : k))}</span>`).join('')}
+      <div class="map-legend">${Object.entries(MAP_ICONS).map(([k, v]) => `<span><i style="background:${v.color}">${esc(v.letter)}</i>${esc(k === 'atm' ? 'Bancomat' : k === 'monument' ? 'Piazza del Monumento' : (BUILDING_TYPES[k] ? BUILDING_TYPES[k].name : k))}</span>`).join('')}
       <span><i style="background:#ffffff;border-radius:50%"></i>Persone</span><span><i style="background:#c9a77a;border-radius:50%"></i>Senzatetto</span><span><i style="background:#4fd1c5"></i>Tuoi veicoli</span></div></div>`;
     this.drawMap($('big-map'));
   }
@@ -123,6 +124,13 @@ export class EscMenu {
     for (const b of md.buildings) {
       g.fillStyle = b.district === 'car' ? '#50555c' : b.district === 'church' ? '#cfc3a8' : b.district === 'suburb' ? '#b09075' : '#6f7378';
       g.fillRect(tx(b.x - b.w / 2), tx(b.z - b.d / 2), b.w * k, b.d * k);
+    }
+    if (md.plaza) {
+      const p = md.plaza;
+      g.fillStyle = '#1c1f24';
+      g.fillRect(tx(p.x - 7), tx(p.z + p.half), 14 * k, (p.roadZ0 - p.z - p.half) * k);
+      g.fillStyle = '#b9ad97';
+      g.fillRect(tx(p.x - p.half), tx(p.z - p.half), p.half * 2 * k, p.half * 2 * k);
     }
     for (const d of this.game.npcs.mapDots()) {
       g.fillStyle = d.kind === 'homeless' ? '#c9a77a' : 'rgba(255,255,255,0.75)';
@@ -149,6 +157,7 @@ export class EscMenu {
     };
     for (const a of this.game.world.atms) icon(a.mx, a.mz, 'atm');
     for (const d of md.doors) icon(d.x, d.z + d.nz * 3, d.type);
+    for (const l of md.landmarks || []) icon(l.x, l.z, l.type);
     const p = this.game.mapPosition();
     g.save();
     g.translate(tx(p.x), tx(p.z));
@@ -163,7 +172,7 @@ export class EscMenu {
     g.fillStyle = '#f0b43c';
     g.font = '600 13px Inter, sans-serif';
     g.textAlign = 'left';
-    g.fillText(`${this.game.city.city} · ${this.game.currentPlaceName()} · ${this.game.clockText()}`, 14, 22);
+    g.fillText(tr(`${this.game.city.city} · ${this.game.currentPlaceName()} · ${this.game.clockText()}`), 14, 22);
   }
 
   renderPause(page) {
@@ -208,15 +217,36 @@ export class EscMenu {
         ${row('Ultima visita in chiesa', this.game.day - st.lastChurchDay === 0 ? 'Oggi' : `${this.game.day - st.lastChurchDay} giorni fa`)}${row('Case di proprietà', st.houses.length)}
         ${row('Meccanico', st.jobs.mechanic ? `Assunto · ${st.jobs.repairs} riparazioni` : 'Non assunto')}${row('Guadagni in officina', formatMoney(st.jobs.earned))}
         ${row('Rapine e scassi', st.stats.robberies)}${row('Colpi sparati', st.stats.shots)}
+        ${row('Felicità', `${st.happinessIcon()} ${Math.round(st.happiness)}% · ${esc(st.happinessTitle())}`)}${row('Veicoli in garage', `${this.game.garage.vehicles().length} / ${this.game.garage.capacity}`)}
       </div>
     </div>`;
   }
 }
 
 /* =====================================================================
-   TAB: inventario compatto + portafoglio + telefono in basso a sinistra
+   TAB: inventario compatto (stile GTA V) + portafoglio.
+   Il telefono è un oggetto dell'inventario: si apre solo cliccandolo.
    ===================================================================== */
 const CATS = [['all', 'Tutto'], ['cibo', 'Cibo'], ['medicinali', 'Medicine'], ['attrezzi', 'Attrezzi'], ['armi', 'Armi'], ['vestiti', 'Vestiti'], ['varie', 'Varie'], ['documenti', 'Documenti']];
+
+/** App del telefono (schermata Home), in ordine di griglia. */
+const PHONE_APPS = [
+  ['contacts', '📞', 'Telefono', '#2f9e5b'],
+  ['map', '🗺️', 'Mappa', '#2b6cb0'],
+  ['garage', '🚗', 'Garage', '#d69e2e'],
+  ['dealer', '🏬', 'Auto & Moto', '#4a5568'],
+  ['wallet', '💳', 'Wallet', '#1a202c'],
+  ['taxi', '🚕', 'Taxi', '#f2c200'],
+  ['aura', '✨', 'Aura', '#6b46c1'],
+  ['levels', '🏆', 'Livelli', '#c05621'],
+  ['mood', '😊', 'Umore', '#d53f8c'],
+  ['memories', '🖼️', 'Ricordi', '#2c7a7b'],
+  ['notes', '📝', 'Note', '#b7791f'],
+];
+const PHONE_TITLES = {
+  contacts: 'Telefono', garage: 'Garage', wallet: 'Wallet', taxi: 'Radio Taxi', aura: 'Aura', levels: 'Livelli Aura',
+  mood: 'Umore', memories: 'Ricordi', notes: 'Note', call: 'Chiamata in corso',
+};
 
 export class TabMenu {
   constructor(game) {
@@ -226,6 +256,8 @@ export class TabMenu {
     this.cat = 'all';
     this.selected = null;
     this.phoneScreen = 'home';
+    this.phoneStack = [];
+    this.phoneOpen = false;
     bindUiSounds(this.root);
     bindUiSounds(this.phoneRoot);
     const onClick = (e) => {
@@ -234,27 +266,67 @@ export class TabMenu {
     };
     this.root.addEventListener('click', onClick);
     this.phoneRoot.addEventListener('click', onClick);
+    // Navigazione da tastiera nel telefono: Backspace = indietro, H = Home
+    this._onKey = (e) => {
+      if (!this.isOpen || !this.phoneOpen) return;
+      if (e.code === 'Backspace') { e.preventDefault(); this.phoneBack(); }
+      else if (e.code === 'KeyH') this.phoneGo('home', true);
+    };
+    window.addEventListener('keydown', this._onKey);
   }
 
   get isOpen() {
     return !this.root.classList.contains('hidden');
   }
 
+  /** TAB: solo l'inventario. Il telefono resta in tasca finché non lo clicchi. */
   open() {
     this.root.classList.remove('hidden');
-    this.phoneRoot.classList.remove('hidden');
-    this.phoneScreen = 'home';
-    this.game.player.phone = true;
-    this.game.player.updateHeld(this.game.state.equipped);
+    this.closePhone(true);
     this.render();
-    this.renderPhone();
-    audio.phoneNotify();
   }
 
   close() {
     this.root.classList.add('hidden');
+    this.closePhone(true);
+  }
+
+  /** Impugna e apre il telefono (clic sull'oggetto Telefono). */
+  openPhone() {
+    if (this.phoneOpen) return;
+    this.phoneOpen = true;
+    this.phoneScreen = 'home';
+    this.phoneStack = [];
+    this.phoneRoot.classList.remove('hidden');
+    this.game.player.phone = true;
+    this.game.player.updateHeld(this.game.state.equipped);
+    this.renderPhone();
+    this.render();
+    audio.phoneNotify();
+  }
+
+  /** Ripone il telefono in tasca. */
+  closePhone(silent = false) {
+    const was = this.phoneOpen;
+    this.phoneOpen = false;
     this.phoneRoot.classList.add('hidden');
     this.game.player.phone = false;
+    if (was && !silent) {
+      this.game.player.updateHeld(this.game.state.equipped);
+      this.render();
+    }
+  }
+
+  phoneGo(screen, reset = false) {
+    if (reset) this.phoneStack = [];
+    else if (screen !== this.phoneScreen) this.phoneStack.push(this.phoneScreen);
+    this.phoneScreen = screen;
+    this.renderPhone();
+  }
+
+  phoneBack() {
+    this.phoneScreen = this.phoneStack.pop() || 'home';
+    this.renderPhone();
   }
 
   render() {
@@ -268,14 +340,17 @@ export class TabMenu {
     this.root.innerHTML = `
       <div class="inv-panel">
         <div class="inv-head">
-          <div><div class="inv-title">Inventario</div><div class="muted">Clicca un oggetto per usarlo · TAB per chiudere</div></div>
+          <div><div class="inv-title">Inventario</div><div class="muted">Clicca un oggetto per usarlo · 📱 Telefono per aprirlo · TAB per chiudere</div></div>
           <div class="inv-wallet"><span>Portafoglio</span><b>${formatMoney(st.cash)}</b>${st.bank.account ? `<small>Conto ${formatMoney(st.bank.balance)}</small>` : ''}</div>
         </div>
         <div class="inv-cats">${CATS.map(([id, l]) => `<button class="${this.cat === id ? 'on' : ''}" data-tb="cat" data-cat="${id}">${l}</button>`).join('')}</div>
-        <div class="inv-tiles">${items.map((it) => `
+        <div class="inv-tiles">${items.map((it) => (it.id === 'telefono' ? `
+          <button class="inv-tile phone-tile ${this.phoneOpen ? 'on worn' : ''}" data-tb="phone" title="Clicca per aprire o riporre il telefono">
+            <span class="t-ico">📱</span><span class="t-name">${esc(it.name)}</span><span class="t-qty">${this.phoneOpen ? 'In mano' : 'Apri'}</span>
+          </button>` : `
           <button class="inv-tile ${this.selected === it.id ? 'on' : ''} ${it.worn || st.equipped === it.id ? 'worn' : ''}" data-tb="sel" data-id="${it.id}">
             <span class="t-ico">${it.icon || '📦'}</span><span class="t-name">${esc(it.name)}</span>${it.cat !== 'vestiti' ? `<span class="t-qty">x${it.qty}</span>` : ''}
-          </button>`).join('') || '<p class="muted">Nessun oggetto in questa categoria.</p>'}</div>
+          </button>`)).join('') || '<p class="muted">Nessun oggetto in questa categoria.</p>'}</div>
         <div class="inv-detail">${sel ? this.detailHtml(sel) : '<span class="muted" style="grid-column: 1 / -1">Seleziona un oggetto per usarlo, impugnarlo o indossarlo.</span>'}</div>
         <div class="inv-give">
           ${near
@@ -300,26 +375,29 @@ export class TabMenu {
   }
 
   renderPhone() {
+    if (!this.phoneOpen) return;
     const st = this.game.state;
-    const contacts = [
-      ['priest', '⛪', 'Don Michele', 'Parroco · conforto e preghiera'],
-      ['dealer', '🚗', 'Concessionario', 'Ordina un veicolo con consegna'],
-      ['bank', '🏦', 'Banca', 'Saldo e informazioni'],
-      ['taxi', '🚕', 'Radio Taxi', 'Portami a…'],
-      ['pizza', '🍕', 'Pizzeria Vesuvio', 'Consegna a domicilio'],
-      ['police', '🚓', 'Polizia 112', 'Emergenze'],
-      ['ambulance', '🚑', 'Ambulanza 118', 'Soccorso sanitario'],
+    const g = this.game;
+    const groups = [
+      ['Persone', [['priest', '⛪', 'Don Michele', 'Parroco · conforto e preghiera']]],
+      ['Servizi', [
+        ['dealer', '🚗', 'Concessionario', 'Ordina un veicolo: arriva nel garage'],
+        ['bank', '🏦', 'Banca', 'Saldo e informazioni'],
+        ['taxi', '🚕', 'Radio Taxi', 'Portami a…'],
+        ['pizza', '🍕', 'Pizzeria Vesuvio', 'Consegna a domicilio'],
+      ]],
+      ['Emergenze', [
+        ['police', '🚓', 'Polizia 112', 'Emergenze'],
+        ['ambulance', '🚑', 'Ambulanza 118', 'Soccorso sanitario'],
+      ]],
     ];
+    const section = (title, inner) => `<div class="ph-sec">${esc(title)}</div>${inner}`;
+    const row = (attrs, icon, title, sub, right = '') => `<button class="ph-row" ${attrs}><span class="ph-ri">${icon}</span><span class="ph-rt"><b>${esc(title)}</b>${sub ? `<small>${sub}</small>` : ''}</span>${right ? `<em>${right}</em>` : '<em>›</em>'}</button>`;
     let screen = '';
     if (this.phoneScreen === 'home') {
-      screen = `<div class="ph-apps">
-        <button data-tb="ph" data-s="contacts"><span>📞</span>Contatti</button>
-        <button data-tb="ph" data-s="notes"><span>📝</span>Note</button>
-        <button data-tb="ph" data-s="memories"><span>🖼️</span>Ricordi</button>
-        <button data-tb="ph" data-s="aura"><span>✨</span>Aura</button>
-        <button data-tb="ph" data-s="levels" class="${this.game.pendingRewards().length ? 'badge' : ''}"><span>🏆</span>Livelli</button>
-        <button data-tb="mapapp"><span>🗺️</span>Mappa</button>
-        <button data-tb="ph" data-s="bank"><span>💳</span>Wallet</button></div>`;
+      const badge = { levels: this.game.pendingRewards().length > 0, garage: false };
+      screen = `<div class="ph-clock">${g.clockText()}<small>${esc(g.currentPlaceName())}</small></div>
+        <div class="ph-apps">${PHONE_APPS.map(([id, ic, label, color]) => `<button data-tb="app" data-s="${id}" class="${badge[id] ? 'badge' : ''}"><span style="background:${color}">${ic}</span>${esc(label)}</button>`).join('')}</div>`;
     } else if (this.phoneScreen === 'levels') {
       const lvl = st.auraLevel;
       const upTo = Math.min(MAX_AURA_LEVEL, Math.max(lvl + 5, 10));
@@ -340,37 +418,62 @@ export class TabMenu {
         <div class="aura-bar"><i style="width:${Math.round(st.aura)}%"></i></div></div>
         <div class="lv-list">${rows.join('')}</div><p class="lv-msg" id="lv-msg">${esc(this.levelMsg || '')}</p>`;
     } else if (this.phoneScreen === 'contacts') {
-      screen = `<div class="ph-list">${contacts.map(([id, ic, name, sub]) => `<button data-tb="call" data-id="${id}"><span>${ic}</span><b>${name}</b><small>${sub}</small></button>`).join('')}</div>`;
+      screen = groups.map(([title, list]) => section(title, `<div class="ph-list">${list.map(([id, ic, name, sub]) => row(`data-tb="call" data-id="${id}"`, ic, name, esc(sub), '📞')).join('')}</div>`)).join('');
+    } else if (this.phoneScreen === 'garage') {
+      const owned = g.ownedVehicles();
+      const garaged = owned.filter((v) => v.inGarage);
+      const outside = owned.filter((v) => !v.inGarage);
+      const icon = (k) => ({ bike: '🚲', scooter: '🛵', moto: '🏍️' }[k] || '🚗');
+      const f = g.mapPosition();
+      screen = `<div class="ph-card"><b>Garage di casa</b><small>Box occupati ${garaged.length}/${g.garage.capacity} · G sulla mappa</small></div>
+        ${section('Nel garage', `<div class="ph-list">${garaged.map((v) => row('data-tb="noop"', icon(v.kind), v.name, `Condizioni ${Math.round(v.health)}%`, '🅿️')).join('') || '<p class="ph-empty">Nessun veicolo nei box.</p>'}</div>`)}
+        ${section('In città', `<div class="ph-list">${outside.map((v) => row('data-tb="noop"', icon(v.kind), v.name, `a ${Math.round(Math.hypot(v.x - f.x, v.z - f.z))} m · ${Math.round(v.health)}%`, '📍')).join('') || '<p class="ph-empty">Nessun veicolo parcheggiato fuori.</p>'}</div>`)}
+        <button class="ph-btn" data-tb="app" data-s="dealer">Ordina un veicolo (consegna in garage)</button>`;
     } else if (this.phoneScreen === 'notes') {
-      screen = `<div class="ph-note"><b>Note</b><p>${st.bank.pin ? `PIN carta: <b>${st.bank.pin}</b>` : 'Apri un conto in banca per ricevere la carta.'}</p><p>Casa: ${esc(this.game.homeDistrictName())}.</p></div>`;
+      screen = `<div class="ph-card"><b>Note</b>
+        <p>${st.bank.pin ? `PIN carta: <b>${st.bank.pin}</b>` : 'Apri un conto in banca per ricevere la carta.'}</p>
+        <p>Casa: ${esc(g.homeDistrictName())} · Garage accanto alla porta di casa.</p>
+        <p>Comandi: E interagisci · F veicolo · Q/E marce (cambio manuale) · TAB inventario · ESC mappa.</p></div>`;
     } else if (this.phoneScreen === 'memories') {
-      screen = `<div class="ph-note"><b>Ricordi</b><p>Mamma e papà ti guardano da lassù. Al Livello Aura ${PARADISE_LEVEL} potrai incontrare Gesù e rivivere i ricordi d'infanzia in Paradiso, dalla chiesa.</p><p>Livello attuale: ${st.auraLevel} · Aura ${Math.round(st.aura)}%</p></div>`;
+      screen = `<div class="ph-card"><b>Ricordi</b><p>Mamma e papà ti guardano da lassù. Al Livello Aura ${PARADISE_LEVEL} potrai incontrare Gesù e rivivere i ricordi d'infanzia in Paradiso, dalla chiesa.</p><p>Livello attuale: ${st.auraLevel} · Aura ${Math.round(st.aura)}%</p></div>`;
     } else if (this.phoneScreen === 'aura') {
-      const since = this.game.day - st.lastChurchDay;
-      screen = `<div class="ph-note"><b>Aura ${Math.round(st.aura)}% · Liv. ${st.auraLevel}</b><div class="aura-bar"><i style="width:${Math.round(st.aura)}%"></i></div><p>${esc(st.auraTitle())}</p>
-        <p>Ultima volta in chiesa: ${since === 0 ? 'oggi' : `${since} giorni fa`}${since >= 5 ? ' — torna presto o perderai Aura!' : ''}</p></div>`;
-    } else if (this.phoneScreen === 'bank') {
-      screen = `<div class="ph-note"><b>Wallet</b><p>Contanti: ${formatMoney(st.cash)}</p><p>${st.bank.account ? `Conto: ${formatMoney(st.bank.balance)}` : 'Nessun conto corrente.'}</p></div>`;
+      const since = g.day - st.lastChurchDay;
+      screen = `<div class="ph-card"><b>Aura ${Math.round(st.aura)}% · Liv. ${st.auraLevel}</b><div class="aura-bar"><i style="width:${Math.round(st.aura)}%"></i></div><p>${esc(st.auraTitle())}</p>
+        <p>Ultima volta in chiesa: ${since === 0 ? 'oggi' : `${since} giorni fa`}${since >= 5 ? ' — torna presto o perderai Aura!' : ''}</p></div>
+        ${section('Ultime azioni', `<ul class="ph-log">${st.auraLog.slice(0, 6).map((l) => `<li class="${l.delta >= 0 ? 'plus' : 'minus'}"><b>${l.delta >= 0 ? '+' : ''}${l.delta}</b> ${esc(l.reason)}</li>`).join('') || '<li class="ph-empty">Nessuna azione rilevante finora.</li>'}</ul>`)}`;
+    } else if (this.phoneScreen === 'mood') {
+      const h = Math.round(st.happiness);
+      screen = `<div class="ph-card"><b>${st.happinessIcon()} Felicità ${h}%</b><div class="aura-bar happy"><i style="width:${h}%"></i></div><p>${esc(st.happinessTitle())}</p>
+        <p class="ph-tip">Sale con cibo buono, pasti al ristorante, sonno, Messa, opere di bene, acquisti e tuning. Scende con incidenti, ferite, arresti e svenimenti.</p></div>
+        ${section('Ultimi momenti', `<ul class="ph-log">${st.happyLog.slice(0, 6).map((l) => `<li class="${l.delta >= 0 ? 'plus' : 'minus'}"><b>${l.delta >= 0 ? '+' : ''}${l.delta}</b> ${esc(l.reason)}</li>`).join('') || '<li class="ph-empty">Niente di particolare.</li>'}</ul>`)}`;
+    } else if (this.phoneScreen === 'wallet') {
+      screen = `<div class="ph-card wallet"><small>Contanti</small><b>${formatMoney(st.cash)}</b></div>
+        <div class="ph-card wallet"><small>Conto corrente</small><b>${st.bank.account ? formatMoney(st.bank.balance) : '—'}</b>${st.bank.account ? '' : '<p>Nessun conto: aprilo in banca per avere la carta.</p>'}</div>
+        ${section('Patrimonio', `<div class="ph-list">${row('data-tb="noop"', '🏠', 'Case di proprietà', '', String(st.houses.length))}${row('data-tb="app" data-s="garage"', '🚗', 'Veicoli', '', String(g.ownedVehicles().length))}</div>`)}`;
     } else if (this.phoneScreen === 'taxi') {
       // Le case in vendita non compaiono tra le destinazioni (solo quelle di tua proprietà)
-      screen = `<div class="ph-list">${this.game.world.doors.map((d, i) => (d.type === 'house' && !st.houses.includes(d.house.id) ? '' : `<button data-tb="taxi" data-i="${i}"><span>📍</span><b>${esc(d.name)}</b><small>${formatMoney(this.game.taxiFare(d))}</small></button>`)).join('')}</div>`;
+      const dests = g.world.doors.map((d, i) => [d, i]).filter(([d]) => !(d.type === 'house' && !st.houses.includes(d.house.id)));
+      const plaza = g.plazaTaxiDoor();
+      screen = `${section('Luoghi', `<div class="ph-list">${row('data-tb="taxi" data-i="plaza"', '★', plaza.name, formatMoney(g.taxiFare(plaza)), '🚕')}${dests.map(([d, i]) => row(`data-tb="taxi" data-i="${i}"`, '📍', d.name, formatMoney(g.taxiFare(d)), '🚕')).join('')}</div>`)}`;
     } else if (this.phoneScreen === 'call') {
-      screen = `<div class="ph-call"><div class="ph-avatar">${this.callIcon}</div><b>${esc(this.callName)}</b><p>${this.callText}</p></div>`;
+      screen = `<div class="ph-call"><div class="ph-avatar">${this.callIcon}</div><b>${esc(this.callName)}</b><p>${this.callText}</p><button class="ph-btn end" data-tb="hangup">Riaggancia</button></div>`;
     }
+    const title = this.phoneScreen === 'home' ? '' : `<div class="ph-head"><button data-tb="back" aria-label="Indietro">‹</button><span>${esc(PHONE_TITLES[this.phoneScreen] || '')}</span><button data-tb="home" aria-label="Home">⌂</button></div>`;
     this.phoneRoot.innerHTML = `<div class="phone small">
-      <div class="ph-status"><span>${this.game.clockText()}</span><span>📶 🔋</span></div>
-      <div class="ph-screen">${screen}</div>
-      <div class="ph-nav"><button data-tb="ph" data-s="home">◯</button>${this.phoneScreen !== 'home' ? '<button data-tb="ph" data-s="back">‹</button>' : ''}</div>
+      <div class="ph-status"><span>${g.clockText()}</span><span>📶 5G 🔋</span></div>
+      ${title}
+      <div class="ph-screen ${this.phoneScreen === 'home' ? 'home' : ''}">${screen}</div>
+      <div class="ph-nav"><button data-tb="back" title="Indietro (Backspace)">‹</button><button data-tb="home" title="Home (H)">◯</button><button data-tb="phoneclose" title="Riponi il telefono">✕</button></div>
     </div>`;
   }
 
-  /** Mostra una "chiamata" sul telefono. */
+  /** Mostra una "chiamata" sul telefono (lo apre se era in tasca). */
   call(icon, name, text) {
+    if (!this.phoneOpen) this.openPhone();
     this.callIcon = icon;
     this.callName = name;
     this.callText = text;
-    this.phoneScreen = 'call';
-    this.renderPhone();
+    this.phoneGo('call');
     audio.phoneRing();
     setTimeout(() => audio.voice(Math.random() < 0.5, 10), 1200);
   }
@@ -392,7 +495,7 @@ export class TabMenu {
         const info = itemInfo(d.id);
         st.outfit[info.slot] = d.id;
         g.refreshOutfit();
-        g.player.phone = true;
+        g.player.phone = this.phoneOpen;
         g.player.updateHeld(st.equipped);
         this.render();
         break;
@@ -415,17 +518,24 @@ export class TabMenu {
         if (npc) g.dialogs.donate(npc);
         break;
       }
-      case 'ph':
-        this.phoneScreen = d.s === 'back' ? (this.phoneScreen === 'taxi' || this.phoneScreen === 'call' ? 'contacts' : 'home') : d.s;
-        this.renderPhone();
+      case 'phone':
+        if (this.phoneOpen) this.closePhone(); else this.openPhone();
+        break;
+      case 'phoneclose': this.closePhone(); break;
+      case 'home': this.phoneGo('home', true); break;
+      case 'back': this.phoneBack(); break;
+      case 'hangup': this.phoneBack(); break;
+      case 'app':
+        if (d.s === 'map') { g.closeTabMenu(); g.openMap(); }
+        else if (d.s === 'dealer') { g.closeTabMenu(); g.dialogs.dealer(true); }
+        else this.phoneGo(d.s);
         break;
       case 'claim':
         this.levelMsg = g.claimReward(Number(d.l));
         if (this.isOpen) { this.render(); this.renderPhone(); }
         break;
-      case 'mapapp': g.closeTabMenu(); g.openMap(); break;
       case 'call': g.phoneCall(d.id, this); break;
-      case 'taxi': g.taxiTo(g.world.doors[Number(d.i)]); break;
+      case 'taxi': g.taxiTo(d.i === 'plaza' ? g.plazaTaxiDoor() : g.world.doors[Number(d.i)]); break;
       default: break;
     }
   }

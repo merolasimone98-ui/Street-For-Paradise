@@ -222,6 +222,7 @@ export class RestaurantService {
         const heal = this.order.reduce((t, i) => t + i.heal * i.qty, 0);
         this.game.state.heal(heal);
         this.game.state.restoreStamina(40);
+        this.game.state.changeHappiness(Math.min(8, 3 + heal / 12), 'Un buon pasto al tavolo');
         this.game.toast(`Sei sazio (+${heal} salute). Il cameriere porta il conto.`, 2600);
         this.bringBill();
       }

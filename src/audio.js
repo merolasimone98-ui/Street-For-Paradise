@@ -205,6 +205,18 @@ class AudioEngine {
     this.tone({ type: 'sine', freq: 110, freqEnd: 70, start: 0.18, dur: 0.12, gain: 0.18 });
   }
 
+  /** Serranda del garage: sferragliare metallico che si arrotola, poi il colpo di fine corsa. */
+  shutter() {
+    for (let i = 0; i < 14; i++) this.burst({ start: i * 0.07, dur: 0.06, gain: 0.07, type: 'bandpass', freq: rand(900, 1600), q: 3 });
+    this.burst({ dur: 1.0, gain: 0.06, type: 'lowpass', freq: 500, freqEnd: 250, brown: true });
+    this.tone({ type: 'sine', freq: 90, freqEnd: 60, start: 1.0, dur: 0.15, gain: 0.16 });
+  }
+
+  /** Tuning: avvitatore pneumatico. */
+  impactWrench() {
+    for (let i = 0; i < 3; i++) this.burst({ start: i * 0.28, dur: 0.18, gain: 0.08, type: 'bandpass', freq: rand(1800, 2600), q: 6 });
+  }
+
   /* ---------- Corpo ---------- */
   footstep(surface = 'asphalt', running = false) {
     const f = { asphalt: 1500, sidewalk: 2200, wood: 900, tile: 3000, grass: 700, marble: 3400 }[surface] || 1500;
@@ -475,13 +487,13 @@ class AudioEngine {
   }
 
   /** speedRatio 0..1, throttle bool */
-  engineUpdate(id, speed, maxSpeed, throttle) {
+  engineUpdate(id, speed, maxSpeed, throttle, rpmOverride = null, level = 1) {
     const e = this.engines.get(id);
     if (!e) return;
     const t = this.t;
     const ratio = Math.min(1, Math.abs(speed) / Math.max(1, maxSpeed));
     if (e.kind === 'bike') {
-      e.out.gain.setTargetAtTime(Math.min(0.12, ratio * 0.2), t, 0.1);
+      e.out.gain.setTargetAtTime(Math.min(0.12, ratio * 0.2) * level, t, 0.1);
       e.tire.frequency.setTargetAtTime(500 + ratio * 1600, t, 0.1);
       if (!throttle && ratio > 0.05) {
         e.tick -= 1 / 60;
@@ -495,7 +507,7 @@ class AudioEngine {
     // Cambio automatico simulato: il regime sale e scende a ogni marcia
     const gears = e.kind === 'scooter' ? 1 : e.kind === 'moto' ? 6 : 5;
     const g = Math.min(gears - 1, Math.floor(ratio * gears));
-    const inGear = gears === 1 ? ratio : ratio * gears - g;
+    const inGear = rpmOverride != null ? Math.max(0, Math.min(1, rpmOverride)) : gears === 1 ? ratio : ratio * gears - g;
     const rpm = 0.18 + inGear * 0.75 + (throttle ? 0.07 : 0);
     const base = { car_small: 34, car: 30, suv: 26, sport: 40, moto: 46, scooter: 70 }[e.kind] || 30;
     const span = { car_small: 95, car: 90, suv: 70, sport: 150, moto: 170, scooter: 210 }[e.kind] || 90;
@@ -506,17 +518,17 @@ class AudioEngine {
     e.am.frequency.setTargetAtTime(f / (e.kind === 'moto' ? 2 : 4), t, 0.06);
     e.filter.frequency.setTargetAtTime((e.kind === 'scooter' ? 1500 : 500) + rpm * (throttle ? 2200 : 1100), t, 0.08);
     const vol = (e.kind === 'scooter' ? 0.07 : e.kind === 'moto' ? 0.12 : 0.1) * (0.55 + rpm * 0.6 + (throttle ? 0.25 : 0));
-    e.out.gain.setTargetAtTime(vol, t, 0.08);
+    e.out.gain.setTargetAtTime(vol * level, t, 0.08);
   }
 
-  engineStop(id) {
+  engineStop(id, silent = false) {
     const e = this.engines.get(id);
     if (!e) return;
     const t = this.t;
     e.out.gain.setTargetAtTime(0.0001, t, 0.15);
     for (const n of e.nodes) { try { n.stop(t + 0.8); } catch (err) { /* già fermo */ } }
     this.engines.delete(id);
-    if (e.kind !== 'bike') this.burst({ dur: 0.4, gain: 0.05, type: 'lowpass', freq: 400, brown: true });
+    if (e.kind !== 'bike' && !silent) this.burst({ dur: 0.4, gain: 0.05, type: 'lowpass', freq: 400, brown: true });
   }
 
   engineIgnition(kind) {
@@ -528,6 +540,8 @@ class AudioEngine {
   stopAllLoops() {
     for (const id of [...this.engines.keys()]) this.engineStop(id);
     this.chainsaw(false);
+    this.hornStop();
+    this.radioStop();
     for (const name of ['crowd', 'city', 'wind']) this.setLoopLevel(name, 0, () => null);
   }
 
@@ -604,6 +618,150 @@ class AudioEngine {
     this.musicTimer = setInterval(schedule, 500);
   }
 
+  /* ---------- Clacson (tenuto premuto = suono prolungato) ---------- */
+  /** kind: 'bike' (campanello), 'scooter'/'moto' (bip), auto (clacson pieno). */
+  hornStart(kind) {
+    if (!this.ready || this.horn) return;
+    const c = this.ctx;
+    const out = c.createGain();
+    out.gain.value = 0.0001;
+    out.connect(this.sfxBus);
+    const h = { out, nodes: [], timer: null, kind };
+    if (kind === 'bike') {
+      // Campanello: "drin drin" ripetuto finché tieni premuto
+      const ring = () => {
+        for (let i = 0; i < 2; i++) {
+          this.tone({ type: 'triangle', freq: 2350, start: i * 0.11, dur: 0.5, gain: 0.12, attack: 0.002 });
+          this.tone({ type: 'sine', freq: 3520, start: i * 0.11, dur: 0.35, gain: 0.05, attack: 0.002 });
+        }
+      };
+      ring();
+      h.timer = setInterval(ring, 420);
+      out.gain.value = 1;
+    } else {
+      const moto = kind === 'scooter' || kind === 'moto';
+      const freqs = moto ? [520, 650] : [392, 494];
+      const f = c.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.value = moto ? 2600 : 1800;
+      f.connect(out);
+      for (const fr of freqs) {
+        const o = c.createOscillator();
+        o.type = moto ? 'square' : 'sawtooth';
+        o.frequency.value = fr;
+        const g = c.createGain();
+        g.gain.value = moto ? 0.05 : 0.09;
+        o.connect(g).connect(f);
+        o.start();
+        h.nodes.push(o);
+      }
+      out.gain.setTargetAtTime(1, this.t, 0.01);
+    }
+    this.horn = h;
+    this.hornT0 = this.t;
+  }
+
+  hornStop() {
+    const h = this.horn;
+    if (!h) return;
+    this.horn = null;
+    if (h.timer) clearInterval(h.timer);
+    // Tocco rapido: almeno un "bip" corto e udibile
+    const minEnd = Math.max(this.t, this.hornT0 + 0.16);
+    h.out.gain.setTargetAtTime(0.0001, minEnd, 0.025);
+    for (const o of h.nodes) o.stop(minEnd + 0.2);
+    setTimeout(() => { try { h.out.disconnect(); } catch (e) { /* già scollegato */ } }, 600);
+  }
+
+  /** Clacson di un automobilista NPC (doppio colpo, volume in base alla distanza). */
+  npcHorn(kind, distance = 10) {
+    if (!this.ready) return;
+    const k = Math.max(0.05, 1 - distance / 70);
+    const moto = kind === 'scooter' || kind === 'moto';
+    for (let i = 0; i < 2; i++) {
+      for (const f of moto ? [520, 650] : [370, 466]) {
+        this.tone({ type: moto ? 'square' : 'sawtooth', freq: f, start: i * 0.26, dur: 0.2, gain: (moto ? 0.03 : 0.05) * k, attack: 0.01 });
+      }
+    }
+  }
+
+  /** Urlo di paura (passanti in fuga). */
+  scream(female = false) {
+    if (!this.ready) return;
+    const f0 = female ? 880 : 520;
+    this.tone({ type: 'sawtooth', freq: f0, freqEnd: f0 * 1.35, dur: 0.55, gain: 0.04, attack: 0.03 });
+    this.tone({ type: 'sine', freq: f0 * 2, freqEnd: f0 * 2.5, dur: 0.5, gain: 0.02, attack: 0.03 });
+  }
+
+  /* ---------- Radio di bordo: 4 stazioni procedurali ---------- */
+  radioStart(index) {
+    if (!this.ready) return;
+    this.radioStop();
+    const st = RADIO_STATIONS[index];
+    if (!st) return;
+    const c = this.ctx;
+    const out = c.createGain();
+    out.gain.value = 0.0001;
+    out.gain.setTargetAtTime(0.9, this.t, 0.3);
+    // "Altoparlanti dell'auto": un po' di filtro passa-banda
+    const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 70;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = st.lofi ? 3200 : 9000;
+    out.connect(hp).connect(lp).connect(this.musicBus);
+    const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
+    const env = (node, t, a, peak, dur) => {
+      node.gain.setValueAtTime(0.0001, t);
+      node.gain.exponentialRampToValueAtTime(peak, t + a);
+      node.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    };
+    const osc = (type, freq, t, dur, peak, a = 0.005, dest = out, detune = 0) => {
+      const o = c.createOscillator(); o.type = type; o.frequency.value = freq; o.detune.value = detune;
+      const g = c.createGain(); env(g, t, a, peak, dur);
+      o.connect(g).connect(dest); o.start(t); o.stop(t + dur + 0.05);
+    };
+    const noise = (t, dur, peak, type, freq) => {
+      const s = c.createBufferSource(); s.buffer = this.noiseBuf || (this.noiseBuf = this.makeNoise(1, 'white'));
+      const f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq;
+      const g = c.createGain(); env(g, t, 0.002, peak, dur);
+      s.connect(f).connect(g).connect(out); s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.05);
+    };
+    const kick = (t) => {
+      const o = c.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+      const g = c.createGain(); env(g, t, 0.003, 0.5, 0.22);
+      o.connect(g).connect(out); o.start(t); o.stop(t + 0.3);
+    };
+    const snare = (t, k = 1) => { noise(t, 0.16, 0.18 * k, 'bandpass', 1900); osc('triangle', 190, t, 0.08, 0.08 * k); };
+    const hat = (t, open = false) => noise(t, open ? 0.2 : 0.04, 0.05, 'highpass', 7000);
+    const step = 60 / st.bpm / 4; // sedicesimi
+    let n = 0;
+    let next = this.t + 0.12;
+    const tick = () => {
+      if (this.radio !== r) return;
+      while (next < this.t + 0.35) {
+        const bar = Math.floor(n / 16), s = n % 16;
+        const chord = st.prog[bar % st.prog.length];
+        const sw = st.swing && s % 2 === 1 ? step * 0.33 : 0;
+        const t = next + sw;
+        st.play({ t, s, bar, chord, midi, osc, kick, snare, hat, noise, step });
+        next += step;
+        n++;
+      }
+    };
+    const r = { out, timer: null, index };
+    this.radio = r;
+    tick();
+    r.timer = setInterval(tick, 90);
+  }
+
+  radioStop() {
+    const r = this.radio;
+    if (!r) return;
+    this.radio = null;
+    clearInterval(r.timer);
+    r.out.gain.setTargetAtTime(0.0001, this.t, 0.15);
+    setTimeout(() => { try { r.out.disconnect(); } catch (e) { /* già scollegato */ } }, 1200);
+  }
+
   stopMusic() {
     if (this.musicTimer) clearInterval(this.musicTimer);
     this.musicTimer = null;
@@ -616,6 +774,63 @@ class AudioEngine {
     }
   }
 }
+
+/**
+ * Stazioni radio: ogni stazione suona in loop un brano procedurale (batteria, basso, accordi, melodia).
+ * play() viene chiamata a ogni sedicesimo con il tempo di attacco t e la posizione s (0-15) nella battuta.
+ */
+export const RADIO_STATIONS = [
+  {
+    name: 'Paradise FM · Pop', bpm: 112,
+    prog: [[60, 64, 67], [67, 71, 74], [57, 60, 64], [65, 69, 72]],
+    play({ t, s, chord, midi, osc, kick, snare, hat, step }) {
+      if (s % 4 === 0) kick(t);
+      if (s === 4 || s === 12) snare(t);
+      if (s % 2 === 0) hat(t, s === 14);
+      if (s % 4 === 0 || s === 10) osc('triangle', midi(chord[0] - 24), t, step * 3.5, 0.16, 0.01);
+      if (s === 0 || s === 8) for (const nn of chord) { osc('sawtooth', midi(nn), t, step * 7, 0.018, 0.03); osc('sawtooth', midi(nn), t, step * 7, 0.014, 0.03, undefined, 9); }
+      const mel = [0, 2, 1, 2, 0, 1, 2, 1];
+      if (s % 2 === 0 && Math.random() < 0.7) osc('square', midi(chord[mel[s / 2]] + 12), t, step * 1.6, 0.025);
+    },
+  },
+  {
+    name: 'Jazz Notturno', bpm: 96, swing: true,
+    prog: [[62, 65, 69, 72], [67, 71, 74, 77], [60, 64, 67, 71], [57, 61, 64, 67]],
+    play({ t, s, chord, midi, osc, kick, hat, noise, step }) {
+      if (s % 4 === 0) osc('sine', midi(chord[(s / 4) % chord.length] - 24), t, step * 3.6, 0.2, 0.01);
+      if (s % 4 === 0 || s % 4 === 3) noise(t, 0.25, 0.03, 'highpass', 6000);
+      if (s === 0) kick(t);
+      if (s === 2 || s === 10) for (const nn of chord) { osc('sine', midi(nn), t, step * 5, 0.03, 0.01); osc('triangle', midi(nn + 12), t, step * 2, 0.008, 0.005); }
+      if (s % 2 === 1 && Math.random() < 0.45) osc('triangle', midi(chord[Math.floor(Math.random() * 4)] + 12), t, step * 1.8, 0.04, 0.01);
+      if (s === 8 && Math.random() < 0.5) hat(t, true);
+    },
+  },
+  {
+    name: 'Lo-Fi Strada', bpm: 78, lofi: true,
+    prog: [[57, 60, 64, 67], [53, 57, 60, 64], [55, 59, 62, 65], [52, 55, 59, 62]],
+    play({ t, s, chord, midi, osc, kick, snare, hat, noise, step }) {
+      if (s === 0 || s === 7 || s === 10) kick(t);
+      if (s === 4 || s === 12) snare(t, 0.7);
+      if (s % 2 === 0) hat(t);
+      if (s % 4 === 0) noise(t, step * 4, 0.006, 'bandpass', 3000); // fruscio del vinile
+      if (s === 0) for (const nn of chord) osc('triangle', midi(nn), t, step * 15, 0.03, 0.08);
+      if (s % 8 === 0) osc('sine', midi(chord[0] - 24), t, step * 7, 0.18, 0.02);
+      if (s === 6 || s === 14) osc('sine', midi(chord[2] + 12), t, step * 3, 0.03, 0.02);
+    },
+  },
+  {
+    name: 'Rock Corsia', bpm: 138,
+    prog: [[52, 59, 64], [55, 62, 67], [57, 64, 69], [50, 57, 62]],
+    play({ t, s, chord, midi, osc, kick, snare, hat, step }) {
+      if (s === 0 || s === 6 || s === 8 || s === 11) kick(t);
+      if (s === 4 || s === 12) snare(t, 1.3);
+      if (s % 2 === 0) hat(t, s === 6);
+      if (s % 2 === 0) for (const nn of chord.slice(0, 2)) { osc('sawtooth', midi(nn - 12), t, step * 1.8, 0.035, 0.004); osc('square', midi(nn - 12), t, step * 1.8, 0.02, 0.004, undefined, 12); }
+      if (s % 2 === 0) osc('triangle', midi(chord[0] - 24), t, step * 1.8, 0.14);
+      if (s === 14 && Math.random() < 0.5) osc('sawtooth', midi(chord[2] + 12), t, step * 4, 0.03, 0.01);
+    },
+  },
+];
 
 export const audio = new AudioEngine();
 

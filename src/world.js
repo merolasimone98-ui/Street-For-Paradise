@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { seededRandom } from './birthdata.js';
 import { buildLandmark, CITY_STYLE } from './landmarks.js';
+import { tr } from './i18n.js';
 
 export const BLOCK = 44;
 export const ROAD = 14;
@@ -17,6 +18,22 @@ export const WORLD_EXT = PLAY_EDGE + 20; // estensione usata da minimappa e mapp
 const TERRAIN_ES = 10; // passo della griglia del terreno (fisica e grafica coincidono)
 const LAKE = { x: -560, z: 120, r: 75 };
 const SIDEWALK_H = 0.2;
+/**
+ * Piazza del Monumento: a nord della città, in campagna, collegata alla strada nord-sud x = PLAZA.x.
+ * Il terreno viene spianato sotto la piazza e lungo la strada d'accesso (vedi terrainHeight).
+ */
+export const PLAZA = { x: -(GRID * CELL) / 2 + 4 * CELL, z: -((GRID * CELL) / 2 + RINGS * CELL) - 128, half: 92 };
+
+/** 1 dentro piazza e strada d'accesso, 0 lontano (bordo sfumato). */
+function plazaMask(x, z) {
+  const urbanEdge = (GRID * CELL) / 2 + RINGS * CELL;
+  const dx = Math.max(0, Math.abs(x - PLAZA.x) - PLAZA.half);
+  const dz = Math.max(0, Math.abs(z - PLAZA.z) - PLAZA.half);
+  const plaza = 1 - THREE.MathUtils.smoothstep(Math.hypot(dx, dz), 2, 30);
+  let road = 0;
+  if (z < -urbanEdge + 15 && z > PLAZA.z) road = 1 - THREE.MathUtils.smoothstep(Math.abs(x - PLAZA.x), 10, 26);
+  return Math.max(plaza, road);
+}
 
 /** Rumore deterministico a somma di sinusoidi (0..1). */
 function terrainNoise(x, z) {
@@ -39,6 +56,8 @@ export function terrainHeight(x, z) {
   // Montagne oltre l'area giocabile
   const r = Math.max(Math.abs(x), Math.abs(z));
   if (r > PLAY_EDGE - 20) h += THREE.MathUtils.smoothstep(r, PLAY_EDGE - 20, PLAY_EDGE + 500) * (90 + 220 * terrainNoise(x * 0.6 + 300, z * 0.6 - 200));
+  // Piazza del Monumento e strada d'accesso in piano
+  if (r < PLAY_EDGE) h *= 1 - plazaMask(x, z);
   return h;
 }
 const TILE_W = 16; // metri coperti da una ripetizione della texture di facciata
@@ -52,6 +71,7 @@ export const DISTRICTS = {
   suburb: { id: 'suburb', name: 'Quartiere residenziale', style: 'house', minH: 6, maxH: 8, lots: [2, 2], sidewalk: 0xb8b3a8, trees: true },
   villas: { id: 'villas', name: 'Zona villette', style: 'house', minH: 6, maxH: 8, lots: [2, 2], sidewalk: 0xc2bdb2, trees: true },
   country: { id: 'country', name: 'Campagna e colline', style: 'none', minH: 0, maxH: 0, lots: [0, 0], sidewalk: 0x8f8b83, trees: false },
+  plaza: { id: 'plaza', name: 'Piazza del Monumento', style: 'none', minH: 0, maxH: 0, lots: [0, 0], sidewalk: 0xb9ad97, trees: true },
 };
 
 const SPAWN_ROW = { rich: 1, middle: 3, worker: 4, poor: 5 };
@@ -76,6 +96,7 @@ export const BUILDING_TYPES = {
   chapel: { name: 'Chiesa di San Francesco', sign: null, w: 16, d: 22, h: 12, style: 'concrete' },
   house: { name: 'Casa in vendita', sign: null, w: 12, d: 10, h: 7 },
   workshop: { name: 'Officina Meccanica', sign: 'OFFICINA', signColor: '#ffb347', signBg: 'rgba(28,18,6,0.95)', w: 26, d: 18, h: 8, style: 'industrial' },
+  homegarage: { name: 'Garage di casa', sign: null, w: 4.4, d: 1 },
 };
 
 /** Icone/colori per minimappa e mappa grande. */
@@ -86,7 +107,8 @@ export const MAP_ICONS = {
   restaurant: { color: '#ffd27a', letter: 'R' }, pizzeria: { color: '#ff6a4d', letter: 'P' }, church: { color: '#ffffff', letter: '†' },
   police: { color: '#8fc0ff', letter: 'Π' }, atm: { color: '#7fd0ff', letter: '€' },
   cathedral: { color: '#fff3c4', letter: '✝' }, chapel: { color: '#ffffff', letter: '†' }, house: { color: '#9be37a', letter: '⌂' },
-  workshop: { color: '#ffb347', letter: 'O' },
+  workshop: { color: '#ffb347', letter: 'O' }, homegarage: { color: '#f0b43c', letter: 'G' },
+  monument: { color: '#e8d9b0', letter: '★' },
 };
 
 function signTexture(text, color, bg) {
@@ -102,10 +124,11 @@ function signTexture(text, color, bg) {
   g.fillStyle = color;
   g.shadowColor = color;
   g.shadowBlur = 28;
-  g.font = '600 140px "Oswald", "Impact", sans-serif';
+  const label = tr(text); // insegna nella lingua scelta all'avvio della partita
+  g.font = `600 ${Math.round(140 * Math.min(1, 12 / Math.max(12, label.length)))}px "Oswald", "Impact", sans-serif`;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.fillText(text, 512, 134);
+  g.fillText(label, 512, 134);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 4;
@@ -415,9 +438,312 @@ export class CityWorld {
     this.buildTerrain();
     this.buildBounds();
     this.buildSky();
-    const lm = buildLandmark(city.id, HALF);
+    // Monumento tipico in una piazza dedicata (solido), sfondo naturale oltre il confine.
+    // Tutto ciò che segue non usa il generatore della città: disposizione e salvataggi restano identici.
+    this.buildPlaza();
+    this.buildHomeGarage();
+    this.buildTraffic();
+  }
+
+  /* ---------- Piazza del Monumento ---------- */
+  buildPlaza() {
+    const lm = buildLandmark(this.city.id, { ...PLAZA, edge: PLAY_EDGE });
     this.landmark = lm.group;
     this.root.add(this.landmark);
+    for (const c of lm.colliders) this.addStaticBox(c.x, c.y, c.z, c.hx, c.hy, c.hz);
+    this.collidables.push(...lm.solids);
+    const P = PLAZA;
+    // Pavimentazione in pietra con fughe e cordolo
+    const c = makeCanvas(512, 512);
+    const g = c.getContext('2d');
+    g.fillStyle = '#b9ad97';
+    g.fillRect(0, 0, 512, 512);
+    for (let y = 0; y < 512; y += 32) for (let x = (y / 32) % 2 ? -32 : 0; x < 512; x += 64) {
+      const k = 0.9 + ((x * 7 + y * 13) % 17) / 100;
+      g.fillStyle = `rgb(${Math.round(190 * k)},${Math.round(178 * k)},${Math.round(156 * k)})`;
+      g.fillRect(x + 2, y + 2, 60, 28);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(P.half / 8, P.half / 8);
+    tex.anisotropy = 8;
+    const paving = new THREE.Mesh(new THREE.PlaneGeometry(P.half * 2, P.half * 2), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 }));
+    paving.rotation.x = -Math.PI / 2;
+    paving.position.set(P.x, 0.04, P.z);
+    paving.receiveShadow = true;
+    this.root.add(paving);
+    // Strada d'accesso dalla città
+    const z0 = -URBAN_HALF + 2, z1 = P.z + P.half - 1;
+    const roadTex = asphaltTextures(seededRandom((this.seed ^ 0x9a2a) >>> 0), 4);
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(ROAD, z0 - z1), new THREE.MeshStandardMaterial({ map: roadTex.map, normalMap: roadTex.normalMap, roughnessMap: roadTex.roughnessMap, roughness: 1 }));
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(P.x, 0.035, (z0 + z1) / 2);
+    road.receiveShadow = true;
+    this.root.add(road);
+    // Panchine, aiuole con alberi, lampioni decorativi (con collider) ai bordi della piazza
+    const benchMat = new THREE.MeshStandardMaterial({ color: 0x7a5434, roughness: 0.9 });
+    const ironMat = new THREE.MeshStandardMaterial({ color: 0x2c3036, roughness: 0.5, metalness: 0.6 });
+    const planterMat = new THREE.MeshStandardMaterial({ color: 0x8f877a, roughness: 1 });
+    const crownMat = new THREE.MeshStandardMaterial({ color: 0x4d7a3a, roughness: 1, flatShading: true });
+    const edgeR = P.half - 8;
+    for (let i = -3; i <= 3; i++) {
+      for (const [sx, sz] of [[i * 24, -edgeR], [i * 24, edgeR], [-edgeR, i * 24], [edgeR, i * 24]]) {
+        if (Math.abs(sx) < 10 && sz > 0) continue; // ingresso dalla strada (lato sud)
+        const x = P.x + sx, z = P.z + sz;
+        const planter = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.6, 2.2), planterMat);
+        planter.position.set(x, 0.3, z);
+        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.8, 1), crownMat);
+        crown.position.set(x, 3.8, z);
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.22, 3, 6), new THREE.MeshStandardMaterial({ color: 0x5a3f2c, roughness: 1 }));
+        trunk.position.set(x, 2, z);
+        planter.castShadow = crown.castShadow = true;
+        this.root.add(planter, trunk, crown);
+        this.addStaticBox(x, 0.6, z, 1.1, 0.6, 1.1);
+        // Panchina accanto
+        const bx = x + (Math.abs(sz) === edgeR ? 3.2 : 0), bz = z + (Math.abs(sx) === edgeR ? 3.2 : 0);
+        const bench = new THREE.Group();
+        const seat = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 0.5), benchMat);
+        seat.position.y = 0.48;
+        const back = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.45, 0.06), benchMat);
+        back.position.set(0, 0.78, -0.24);
+        bench.add(seat, back);
+        for (const lx of [-0.8, 0.8]) {
+          const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.48, 0.45), ironMat);
+          leg.position.set(lx, 0.24, 0);
+          bench.add(leg);
+        }
+        bench.position.set(bx, 0.04, bz);
+        bench.rotation.y = Math.atan2(P.x - bx, P.z - bz);
+        this.root.add(bench);
+      }
+    }
+    // Targa con il nome del monumento all'ingresso
+    const plateTex = signTexture(`★ ${CITY_STYLE[this.city.id] ? CITY_STYLE[this.city.id].label : 'Monumento'}`, '#f6e7b0', 'rgba(30,24,14,0.95)');
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(6, 1.5), new THREE.MeshBasicMaterial({ map: plateTex, toneMapped: false }));
+    plate.position.set(P.x + 11, 2.4, P.z + P.half - 2);
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.4, 0.2), ironMat);
+    post.position.set(P.x + 11, 1.2, P.z + P.half - 2.05);
+    this.root.add(plate, post);
+    this.addStaticBox(P.x + 11, 1.2, P.z + P.half - 2.05, 0.1, 1.2, 0.1);
+    this.mapData.plaza = { x: P.x, z: P.z, half: P.half, roadZ0: z0, roadZ1: z1, label: lm.style.label };
+    this.mapData.landmarks = [{ x: P.x, z: P.z, type: 'monument', name: `Piazza del Monumento · ${lm.style.label}` }];
+  }
+
+  /* ---------- Garage di casa: serranda accanto all'ingresso di casa ---------- */
+  buildHomeGarage() {
+    const home = this.mapData.home;
+    if (!home) return;
+    const nz = this.spawn && this.spawn.yaw === Math.PI ? -1 : 1;
+    const x = home.x + 5.2;
+    const faceZ = home.z;
+    const W = 4.2, H = 3.0;
+    const slatC = makeCanvas(128, 128);
+    const sg = slatC.getContext('2d');
+    sg.fillStyle = '#9aa3ab';
+    sg.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 12) { sg.fillStyle = '#7c858d'; sg.fillRect(0, y, 128, 2); sg.fillStyle = '#b8c0c7'; sg.fillRect(0, y + 2, 128, 2); }
+    const slatTex = new THREE.CanvasTexture(slatC);
+    slatTex.colorSpace = THREE.SRGBColorSpace;
+    slatTex.wrapS = slatTex.wrapT = THREE.RepeatWrapping;
+    slatTex.repeat.set(2, 2);
+    const g = new THREE.Group();
+    const shutter = new THREE.Mesh(new THREE.BoxGeometry(W, H, 0.1), new THREE.MeshStandardMaterial({ map: slatTex, bumpMap: slatTex, bumpScale: 0.6, metalness: 0.6, roughness: 0.4 }));
+    shutter.position.set(0, H / 2, 0.06);
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x24262a, roughness: 0.4, metalness: 0.5 });
+    const fl = new THREE.Mesh(new THREE.BoxGeometry(0.16, H + 0.2, 0.2), frameMat);
+    fl.position.set(-W / 2 - 0.08, (H + 0.2) / 2, 0.1);
+    const fr = fl.clone();
+    fr.position.x = W / 2 + 0.08;
+    const box = new THREE.Mesh(new THREE.BoxGeometry(W + 0.4, 0.4, 0.35), frameMat);
+    box.position.set(0, H + 0.2, 0.17);
+    const signMat = new THREE.MeshBasicMaterial({ map: signTexture('GARAGE', '#f0b43c', 'rgba(14,12,8,0.95)'), toneMapped: false });
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45), signMat);
+    sign.position.set(0, H + 0.75, 0.12);
+    g.add(shutter, fl, fr, box, sign);
+    g.position.set(x, SIDEWALK_H, faceZ);
+    if (nz < 0) g.rotation.y = Math.PI;
+    this.root.add(g);
+    // Rampa/passo carrabile dipinto sul marciapiede
+    const ramp = new THREE.Mesh(new THREE.PlaneGeometry(W + 0.6, 4), new THREE.MeshStandardMaterial({ color: 0x6d6a66, roughness: 0.9 }));
+    ramp.rotation.x = -Math.PI / 2;
+    ramp.position.set(x, SIDEWALK_H + 0.012, faceZ + nz * 2);
+    ramp.receiveShadow = true;
+    this.root.add(ramp);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xf0b43c, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.68, 48), ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, SIDEWALK_H + 0.02, faceZ + nz * 1.2);
+    ring.renderOrder = 2;
+    this.root.add(ring);
+    this.doorRings.push(ring);
+    const door = { id: 'homegarage', type: 'homegarage', name: 'Garage di casa', x, z: faceZ, nx: 0, nz };
+    this.doors.push(door);
+    this.mapData.doors.push(door);
+    this.homeGarage = door;
+    // Nessun veicolo parcheggiato davanti alla serranda
+    this.parkingSpots = this.parkingSpots.filter(([px, pz]) => Math.hypot(px - x, pz - (faceZ + nz * 8)) > 9);
+  }
+
+  /* ---------- Semafori agli incroci del centro e segnaletica nei quartieri ---------- */
+  buildTraffic() {
+    const lines = [];
+    for (let i = 0; i <= GRID; i++) lines.push(-HALF + i * CELL);
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const one = new THREE.Vector3(1, 1, 1);
+    const p = new THREE.Vector3();
+    // Semafori: incroci interni del centro (escluse le strade di bordo), un palo per ogni angolo.
+    // Ogni testa guarda il traffico che arriva lungo un asse: gruppo 0 = asse Z (nord-sud), gruppo 1 = asse X.
+    const poles = [];
+    const heads = [[], []];
+    for (let i = 1; i < GRID; i++) {
+      for (let j = 1; j < GRID; j++) {
+        const ix = lines[i], iz = lines[j];
+        for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          // Il palo sta sul marciapiede vicino all'angolo (lontano dal lampione d'angolo);
+          // la testa guarda chi arriva verso l'incrocio lungo il suo asse
+          const axis = sx * sz > 0 ? 0 : 1;
+          const x = ix + sx * (ROAD / 2 + (axis === 0 ? 0.6 : 3.2));
+          const z = iz + sz * (ROAD / 2 + (axis === 0 ? 3.2 : 0.6));
+          const rot = axis === 0 ? (sz > 0 ? 0 : Math.PI) : (sx > 0 ? Math.PI / 2 : -Math.PI / 2);
+          poles.push([x, z, rot]);
+          heads[axis].push([x, z, rot]);
+          this.addStaticBox(x, SIDEWALK_H + 1.7, z, 0.1, 1.7, 0.1);
+        }
+      }
+    }
+    const poleGeo = new THREE.CylinderGeometry(0.07, 0.09, 3.4, 8);
+    poleGeo.translate(0, 1.7, 0);
+    const housingGeo = new THREE.BoxGeometry(0.34, 0.95, 0.26);
+    housingGeo.translate(0, 3.35, 0.05);
+    const visorGeo = new THREE.BoxGeometry(0.36, 0.05, 0.16);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x2c3036, roughness: 0.5, metalness: 0.6 });
+    const housingMat = new THREE.MeshStandardMaterial({ color: 0x1b1d20, roughness: 0.6, metalness: 0.3 });
+    const inst = (geo, mat, list, offset = null) => {
+      const im = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
+      list.forEach(([x, z, rot], i) => {
+        p.set(x, SIDEWALK_H, z);
+        q.setFromAxisAngle(yAxis, rot);
+        m4.compose(p, q, one);
+        if (offset) m4.multiply(offset);
+        im.setMatrixAt(i, m4);
+      });
+      im.count = list.length;
+      im.instanceMatrix.needsUpdate = true;
+      this.root.add(im);
+      return im;
+    };
+    inst(poleGeo, poleMat, poles).castShadow = true;
+    inst(housingGeo, housingMat, poles).castShadow = true;
+    // Lampade: 3 per testa (rosso, giallo, verde); materiali per gruppo → si accendono a turno
+    const bulbGeo = new THREE.CircleGeometry(0.085, 16);
+    this.trafficMats = [0, 1].map(() => ({
+      red: new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff2a1a, emissiveIntensity: 0, roughness: 0.3 }),
+      yellow: new THREE.MeshStandardMaterial({ color: 0x221800, emissive: 0xffb21a, emissiveIntensity: 0, roughness: 0.3 }),
+      green: new THREE.MeshStandardMaterial({ color: 0x002210, emissive: 0x1aff7a, emissiveIntensity: 0, roughness: 0.3 }),
+    }));
+    for (const axis of [0, 1]) {
+      for (const [k, y] of [['red', 3.64], ['yellow', 3.36], ['green', 3.08]]) {
+        const off = new THREE.Matrix4().makeTranslation(0, y, 0.185);
+        inst(bulbGeo, this.trafficMats[axis][k], heads[axis], off);
+        const vOff = new THREE.Matrix4().makeTranslation(0, y + 0.11, 0.24);
+        inst(visorGeo, housingMat, heads[axis], vOff);
+      }
+    }
+    this.trafficPhase = -1;
+
+    // Segnaletica nei quartieri: STOP agli incroci delle strade residenziali, limite 50 all'ingresso della città,
+    // precedenza sulle strade di bordo del centro. Pali con collider sottile.
+    const signCanvas = (draw) => {
+      const c = makeCanvas(128, 128);
+      draw(c.getContext('2d'));
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    };
+    const stopTex = signCanvas((g) => {
+      g.fillStyle = '#ffffff';
+      g.beginPath();
+      for (let k = 0; k < 8; k++) { const a = Math.PI / 8 + (k * Math.PI) / 4; g.lineTo(64 + Math.cos(a) * 62, 64 + Math.sin(a) * 62); }
+      g.closePath(); g.fill();
+      g.fillStyle = '#c8102e';
+      g.beginPath();
+      for (let k = 0; k < 8; k++) { const a = Math.PI / 8 + (k * Math.PI) / 4; g.lineTo(64 + Math.cos(a) * 56, 64 + Math.sin(a) * 56); }
+      g.closePath(); g.fill();
+      g.fillStyle = '#ffffff'; g.font = '700 38px Oswald, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('STOP', 64, 66);
+    });
+    const yieldTex = signCanvas((g) => {
+      g.fillStyle = '#c8102e';
+      g.beginPath(); g.moveTo(4, 10); g.lineTo(124, 10); g.lineTo(64, 120); g.closePath(); g.fill();
+      g.fillStyle = '#ffffff';
+      g.beginPath(); g.moveTo(24, 22); g.lineTo(104, 22); g.lineTo(64, 96); g.closePath(); g.fill();
+    });
+    const limitTex = signCanvas((g) => {
+      g.fillStyle = '#c8102e'; g.beginPath(); g.arc(64, 64, 62, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#ffffff'; g.beginPath(); g.arc(64, 64, 48, 0, Math.PI * 2); g.fill();
+      g.fillStyle = '#111111'; g.font = '700 50px Oswald, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('50', 64, 68);
+    });
+    const allLines = [];
+    for (let i = -RINGS; i <= GRID + RINGS; i++) allLines.push(-HALF + i * CELL);
+    const stops = [], yields = [], limits = [];
+    for (const ix of allLines) {
+      for (const iz of allLines) {
+        const inner = Math.abs(ix) < HALF - 1 && Math.abs(iz) < HALF - 1;
+        if (inner) continue; // incroci del centro: ci sono i semafori
+        const edge = Math.abs(ix) > URBAN_HALF - 1 || Math.abs(iz) > URBAN_HALF - 1;
+        if (edge) continue;
+        const onCityBorder = Math.abs(Math.abs(ix) - HALF) < 1 || Math.abs(Math.abs(iz) - HALF) < 1;
+        // Un cartello per incrocio, vicino all'angolo sud-est (lontano dal lampione), rivolto al traffico da sud
+        const x = ix + ROAD / 2 + 0.6, z = iz + ROAD / 2 + 3.5;
+        (onCityBorder ? yields : stops).push([x, z, 0]);
+        this.addStaticBox(x, SIDEWALK_H + 1.2, z, 0.06, 1.2, 0.06);
+      }
+    }
+    // Limite 50 sulle quattro strade principali d'ingresso al centro
+    for (const l of [lines[2], lines[5]]) {
+      const o = ROAD / 2 + 6;
+      limits.push([l + ROAD / 2 + 0.6, HALF + o, 0], [l - ROAD / 2 - 0.6, -HALF - o, Math.PI], [HALF + o, l - ROAD / 2 - 0.6, Math.PI / 2], [-HALF - o, l + ROAD / 2 + 0.6, -Math.PI / 2]);
+    }
+    for (const [x, z] of limits) this.addStaticBox(x, SIDEWALK_H + 1.2, z, 0.06, 1.2, 0.06);
+    const signPole = new THREE.CylinderGeometry(0.04, 0.04, 2.4, 6);
+    signPole.translate(0, 1.2, 0);
+    const plate = new THREE.CircleGeometry(0.38, 24);
+    plate.translate(0, 2.25, 0.05);
+    const tri = new THREE.PlaneGeometry(0.8, 0.8);
+    tri.translate(0, 2.25, 0.05);
+    const all = [...stops, ...yields, ...limits];
+    inst(signPole, poleMat, all).castShadow = true;
+    inst(plate, new THREE.MeshStandardMaterial({ map: stopTex, transparent: true, alphaTest: 0.5, roughness: 0.5 }), stops);
+    inst(tri, new THREE.MeshStandardMaterial({ map: yieldTex, transparent: true, alphaTest: 0.5, roughness: 0.5 }), yields);
+    inst(plate, new THREE.MeshStandardMaterial({ map: limitTex, transparent: true, alphaTest: 0.5, roughness: 0.5 }), limits);
+    // Retro dei cartelli (grigio)
+    const back = plate.clone();
+    back.rotateY(Math.PI);
+    inst(back, new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.6, metalness: 0.4 }), [...stops, ...limits]);
+  }
+
+  /** Ciclo dei semafori: 14 s verde, 3 s giallo, poi tocca all'altro asse (rosso per l'asse fermo). */
+  updateTraffic(t, night) {
+    if (!this.trafficMats) return;
+    const cycle = 34;
+    const k = t % cycle;
+    const phase = k < 14 ? 0 : k < 17 ? 1 : k < 31 ? 2 : 3; // 0: Z verde · 1: Z giallo · 2: X verde · 3: X giallo
+    const glow = 2.2 + night * 1.6;
+    if (phase === this.trafficPhase && Math.abs(glow - (this.trafficGlow || 0)) < 0.05) return;
+    this.trafficPhase = phase;
+    this.trafficGlow = glow;
+    const set = (axis, light) => {
+      const m = this.trafficMats[axis];
+      m.red.emissiveIntensity = light === 'red' ? glow : 0;
+      m.yellow.emissiveIntensity = light === 'yellow' ? glow : 0;
+      m.green.emissiveIntensity = light === 'green' ? glow : 0;
+    };
+    set(0, phase === 0 ? 'green' : phase === 1 ? 'yellow' : 'red');
+    set(1, phase === 2 ? 'green' : phase === 3 ? 'yellow' : 'red');
   }
 
   /** Bancomat sui marciapiedi (uno accanto alla banca + altri sparsi). */
@@ -458,12 +784,33 @@ export class CityWorld {
   }
 
   /* ---------- Fisica ---------- */
+  /**
+   * Collider statico a scatola. I collider piccoli e medi (palazzi, alberi, lampioni, pali, cartelli…) vengono
+   * raggruppati in un corpo composto per zona di 44 m: le collisioni sono identiche, ma la fase di broadphase
+   * di Cannon-es gestisce poche centinaia di corpi invece di migliaia (fisica molto più leggera e fluida).
+   */
   addStaticBox(x, y, z, hx, hy, hz) {
-    const body = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, material: this.staticMaterial });
-    body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
-    body.position.set(x, y, z);
-    this.physics.addBody(body);
-    this.bodies.push(body);
+    if (Math.max(hx, hz) > 30) {
+      const body = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, material: this.staticMaterial });
+      body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+      body.position.set(x, y, z);
+      this.physics.addBody(body);
+      this.bodies.push(body);
+      return body;
+    }
+    if (!this.staticBuckets) this.staticBuckets = new Map();
+    const S = 44;
+    const kx = Math.floor(x / S), kz = Math.floor(z / S);
+    const key = `${kx},${kz}`;
+    let body = this.staticBuckets.get(key);
+    if (!body) {
+      body = new CANNON.Body({ mass: 0, type: CANNON.Body.STATIC, material: this.staticMaterial });
+      body.position.set((kx + 0.5) * S, 0, (kz + 0.5) * S);
+      this.physics.addBody(body);
+      this.bodies.push(body);
+      this.staticBuckets.set(key, body);
+    }
+    body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)), new CANNON.Vec3(x - body.position.x, y, z - body.position.z));
     return body;
   }
 
@@ -610,6 +957,7 @@ export class CityWorld {
       const z = (rng() * 2 - 1) * (PLAY_EDGE - 15);
       if (Math.max(Math.abs(x), Math.abs(z)) < URBAN_HALF + 25) continue;
       if (Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 8) continue;
+      if (plazaMask(x, z) > 0.01) continue; // niente alberi sulla piazza e sulla strada del monumento
       spots.push([x, z, rng() < 0.5]);
     }
     const trunkGeo = new THREE.CylinderGeometry(0.22, 0.32, 4, 6);
@@ -1296,7 +1644,8 @@ export class CityWorld {
           if (sale) {
             forSale++;
             const kind = villas ? 'villetta' : 'casa';
-            const price = villas ? Math.round((180 + rng() * 270) / 5) * 5000 : Math.round((65 + rng() * 60) / 5) * 5000;
+            // Prezzi di mercato: case € 165.000-330.000, villette € 390.000-890.000 (una sola estrazione, come prima)
+            const price = villas ? Math.round((390 + rng() * 500) / 5) * 5000 : Math.round((165 + rng() * 165) / 5) * 5000;
             const id = `h${gj}_${gi}_${nz}_${k}`;
             const name = villas ? 'Villetta in vendita' : 'Casa in vendita';
             const door = this.addDoor('house', lx, frontZ + nz * 0.02, { ...BUILDING_TYPES.house, name }, 1.4, nz);
@@ -1430,6 +1779,7 @@ export class CityWorld {
 
   /* ---------- Query ---------- */
   getDistrictAt(x, z) {
+    if (Math.abs(x - PLAZA.x) < PLAZA.half + 4 && Math.abs(z - PLAZA.z) < PLAZA.half + 4) return DISTRICTS.plaza;
     const r = Math.max(Math.abs(x), Math.abs(z));
     if (r > URBAN_HALF + 8) return DISTRICTS.country;
     if (Math.abs(x) > HALF + ROAD / 2 || Math.abs(z) > HALF + ROAD / 2) {

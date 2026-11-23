@@ -50,7 +50,8 @@ export function pixelRatioFor(quality) {
   const dpr = window.devicePixelRatio || 1;
   if (quality === 'low') return Math.min(dpr, 0.85);
   if (quality === 'medium') return Math.min(dpr, 1.25);
-  return Math.min(dpr, 2);
+  // Tetto a 1,5: oltre, su schermi HiDPI e telefoni, il costo in pixel cresce senza un guadagno visibile
+  return Math.min(dpr, 1.5);
 }
 
 /** HTML dei controlli impostazioni (usato nel menu principale e nella pausa). */

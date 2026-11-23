@@ -8,6 +8,7 @@ import { tweens } from './tween.js';
 import { $, fadeTo, setFade } from './ui.js';
 import { audio } from './audio.js';
 import { loadSettings, pixelRatioFor } from './settings.js';
+import { models } from './models.js';
 
 window.__SFP_BOOTED = true;
 
@@ -36,8 +37,9 @@ try {
 }
 renderer.setPixelRatio(pixelRatioFor(loadSettings().quality));
 renderer.setSize(window.innerWidth, window.innerHeight, false);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 1.0; // il gioco la regola in base all'ora (DayCycle.exposure)
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -47,7 +49,7 @@ const space = new SpaceScene(renderer);
 const app = { state: 'loading', intro: null, game: null };
 
 // Aggancio di debug (solo aprendo la pagina con #debug nell'URL)
-if (location.hash === '#debug') window.sfp = app;
+if (location.hash === '#debug') { window.sfp = app; window.renderer = renderer; window.models = models; }
 
 const menu = new Menu({
   onNewGame: (sex) => startNewGame(sex),
@@ -117,12 +119,28 @@ function onResize() {
 }
 window.addEventListener('resize', onResize);
 
-/* ---------- Game loop ---------- */
+/* ---------- Contesto WebGL perso (GPU resettata, troppe schede) ---------- */
+// Three.js ricostruisce da solo il proprio stato al ripristino; noi saltiamo i fotogrammi nel frattempo.
+let contextLost = false;
+renderer.domElement.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  contextLost = true;
+  console.warn('[Street for Paradise] contesto WebGL perso: in attesa del ripristino…');
+}, false);
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  contextLost = false;
+  last = performance.now();
+  console.info('[Street for Paradise] contesto WebGL ripristinato.');
+}, false);
+
+/* ---------- Game loop (un solo loop: renderer.setAnimationLoop) ---------- */
 let last = performance.now();
-function frame(now) {
-  requestAnimationFrame(frame);
+function frame() {
+  const now = performance.now();
+  // Delta in secondi, limitato: niente valori negativi né salti enormi dopo una scheda nascosta
   const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
   last = now;
+  if (contextLost) return;
   tweens.update(dt);
 
   switch (app.state) {
@@ -135,6 +153,7 @@ function frame(now) {
     case 'game':
       if (app.game) {
         app.game.update(dt);
+        models.update(dt); // animazioni dei modelli .glb (secondi)
         app.game.render();
       }
       break;
@@ -143,7 +162,9 @@ function frame(now) {
       renderer.render(space.scene, space.camera);
   }
 }
-requestAnimationFrame(frame);
+renderer.setAnimationLoop(frame);
+// Ripresa dopo una scheda nascosta: il prossimo delta parte da adesso
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') last = performance.now(); });
 
 /* ---------- Avvio ---------- */
 (async function boot() {
@@ -151,7 +172,8 @@ requestAnimationFrame(frame);
   const loadingText = $('loading-text');
   const timer = setTimeout(() => { loadingText.textContent = 'Generazione del pianeta…'; }, 2500);
   try {
-    await space.ready;
+    // Pianeta del menu e modelli .glb opzionali (assets/models/manifest.json) in parallelo
+    await Promise.all([space.ready, models.load(renderer)]);
   } catch (e) {
     console.warn(e);
   }

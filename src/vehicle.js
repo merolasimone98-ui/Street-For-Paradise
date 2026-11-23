@@ -5,6 +5,7 @@ import * as CANNON from 'cannon-es';
 import { GROUPS } from './playerstate.js';
 import { VEHICLE_MODELS } from './items.js';
 import { disposeObject3D } from './ui.js';
+import { models } from './models.js';
 
 export const SPECS = {
   bike: { len: 1.75, wid: 0.6, h: 1.05, mass: 90, maxSpeed: 9, accel: 3.2, brake: 8, reverseAccel: 1.2, reverseMax: 1.5, steer: 2.4, ride: true, seatY: 0.92, seatZ: -0.2, wheelR: 0.34, wheelBase: 1.05 },
@@ -86,10 +87,11 @@ export function buildVehicleMesh(kind, color) {
   const group = new THREE.Group();
   const wheels = [];
   const steerNodes = [];
-  const paint = new THREE.MeshPhysicalMaterial({ color, metalness: 0.55, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.08 });
+  // Vernice a due strati: base metallizzata + trasparente lucido (clearcoat) che riflette cielo e città
+  const paint = new THREE.MeshPhysicalMaterial({ color, metalness: 0.45, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.25 });
   const black = std(0x16171a, { roughness: 0.5 });
   const chrome = std(0xd0d4d8, { metalness: 0.95, roughness: 0.2 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x1b2836, metalness: 0.2, roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.82 });
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x141d28, metalness: 0, roughness: 0.02, ior: 1.5, clearcoat: 1, clearcoatRoughness: 0, envMapIntensity: 1.6, transparent: true, opacity: 0.86 });
   const headMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff2d6, emissiveIntensity: 1.3 });
   const tailMat = new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff1a1a, emissiveIntensity: 0.9 });
 
@@ -285,13 +287,36 @@ export class Vehicle {
     this.mesh = built.group;
     this.wheels = built.wheels;
     this.steerNodes = built.steerNodes;
+    // Modello .glb opzionale (assets/models/manifest.json): sostituisce la carrozzeria procedurale
+    this.glb = models.createVehicle(this.model, this.kind, this.spec, this.color);
+    if (this.glb) {
+      const keep = this.glb.replacesWheels ? [] : [...this.wheels.map((w) => w.node), ...this.steerNodes];
+      for (const child of [...this.mesh.children]) {
+        if (keep.some((n) => n === child || isDescendant(n, child))) continue;
+        this.mesh.remove(child);
+        disposeObject3D(child);
+      }
+      this.mesh.add(this.glb.root);
+      if (this.glb.replacesWheels) {
+        this.wheels = this.glb.wheels;
+        this.steerNodes = this.glb.steerNodes;
+      }
+    }
     this.mesh.userData.vehicle = this; // per il raycast dei proiettili
     this.police = !!o.police;
     if (this.police) this.addPoliceLivery();
     scene.add(this.mesh);
     // Parti deformabili (carrozzeria, paraurti, luci): si piegano/spostano con gli urti
-    this.deformables = this.mesh.children.filter((c) => c.isMesh && !this.wheels.some((w) => w.node === c)).map((m) => ({
-      m, pos: m.position.clone(), rot: m.rotation.clone(), off: new THREE.Vector3(), tilt: new THREE.Vector3(),
+    // Per i .glb le parti sono dentro un nodo scalato: gli spostamenti vanno divisi per la scala (k)
+    const parts = [];
+    if (this.glb) {
+      this.glb.root.traverse((o) => { if (o.isMesh && !this.wheels.some((w) => isDescendant(w.node, o))) parts.push(o); });
+    } else {
+      for (const c of this.mesh.children) if (c.isMesh && !this.wheels.some((w) => w.node === c)) parts.push(c);
+    }
+    const dk = this.glb ? 1 / this.glb.scale : 1;
+    this.deformables = parts.map((m) => ({
+      m, k: dk, pos: m.position.clone(), rot: m.rotation.clone(), off: new THREE.Vector3(), tilt: new THREE.Vector3(),
     }));
     this.health = THREE.MathUtils.clamp(o.health ?? 100, 0, 100);
     this.broken = this.health <= 0;
@@ -391,7 +416,7 @@ export class Vehicle {
       d.off.z = THREE.MathUtils.clamp(d.off.z + (Math.random() - 0.5) * 0.06 * k, -0.1, 0.1);
       d.tilt.x = THREE.MathUtils.clamp(d.tilt.x + (Math.random() - 0.5) * 0.12 * k, -0.18, 0.18);
       d.tilt.z = THREE.MathUtils.clamp(d.tilt.z + (Math.random() - 0.5) * 0.12 * k, -0.18, 0.18);
-      d.m.position.copy(d.pos).add(d.off);
+      d.m.position.copy(d.pos).addScaledVector(d.off, d.k);
       d.m.rotation.set(d.rot.x + d.tilt.x, d.rot.y, d.rot.z + d.tilt.z);
     }
   }
@@ -566,8 +591,15 @@ export class Vehicle {
   dispose() {
     this.physics.removeBody(this.body);
     this.scene.remove(this.mesh);
-    disposeObject3D(this.mesh);
+    if (this.glb) models.releaseMixer(this.glb.mixer);
+    disposeObject3D(this.mesh); // salta geometrie/texture condivise dei .glb (userData.sharedAsset)
   }
+}
+
+/** true se `node` sta dentro `ancestor` nella gerarchia. */
+function isDescendant(node, ancestor) {
+  for (let p = node.parent; p; p = p.parent) if (p === ancestor) return true;
+  return false;
 }
 
 /** Fumo (grigio → nero) e fiammelle dai motori danneggiati: pool di sprite riutilizzati. */
@@ -584,6 +616,7 @@ export class SmokeFX {
     g.fillStyle = grd;
     g.fillRect(0, 0, 64, 64);
     this.tex = new THREE.CanvasTexture(c);
+    this.tex.colorSpace = THREE.SRGBColorSpace; // texture di colore: sRGB
     this.group = new THREE.Group();
     scene.add(this.group);
     this.parts = [];

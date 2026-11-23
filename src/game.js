@@ -152,6 +152,7 @@ export class Game {
     this.police = new PoliceManager(this);
     this.workshop = null;
     this.buildShotFx();
+    this.updateHeadlights(0); // crea subito i fari (niente ricompilazione degli shader durante il gioco)
 
     this.el = { ctp: $('click-to-play'), ctpTitle: $('ctp-title'), ctpSub: $('ctp-sub') };
     this.bindEvents();
@@ -492,7 +493,9 @@ export class Game {
     const fp = this.rig.fpBlend > 0.5;
     this.player.mesh.userData.head.visible = !fp;
     if (fp && this.player.pose === 'auto') this.player.facing = this.rig.yaw + Math.PI;
-    this.dayCycle.update(this.hour, focus);
+    const light = this.dayCycle.update(this.hour, focus);
+    this.renderer.toneMappingExposure += (this.dayCycle.exposure - this.renderer.toneMappingExposure) * Math.min(1, dt * 2);
+    this.updateHeadlights(light.night);
     this.updateAmbience(dt);
 
     const mapPos = this.mapPosition();
@@ -609,6 +612,25 @@ export class Game {
   /* =====================================================================
      Pistola: proiettile (raycast dal centro dello schermo), traccia, scintille, conseguenze
      ===================================================================== */
+  /** Fari del veicolo guidato: SpotLight reale di notte (sempre in scena, intensità 0 di giorno). */
+  updateHeadlights(night) {
+    if (!this.headlight) {
+      this.headlight = new THREE.SpotLight(0xfff1d6, 0, 60, 0.5, 0.45, 1.6);
+      this.headlight.position.set(0, -500, 0);
+      this.scene.add(this.headlight, this.headlight.target);
+    }
+    const v = this.driving;
+    const on = v && !this.interior && night > 0.3 && !v.broken;
+    if (!on) { this.headlight.intensity = 0; return; }
+    const h = v.heading;
+    const p = v.body.interpolatedPosition;
+    const front = v.spec.ride ? 0.6 : v.spec.len / 2;
+    this.headlight.position.set(p.x + Math.sin(h) * front, p.y + 0.8, p.z + Math.cos(h) * front);
+    this.headlight.target.position.set(p.x + Math.sin(h) * (front + 18), p.y - 0.5, p.z + Math.cos(h) * (front + 18));
+    this.headlight.target.updateMatrixWorld();
+    this.headlight.intensity = (v.spec.ride ? 160 : 260) * Math.min(1, (night - 0.3) * 3);
+  }
+
   buildShotFx() {
     const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
     this.tracer = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0 }));
@@ -1832,8 +1854,10 @@ export class Game {
   }
 
   render() {
-    if (this.paradise) this.renderer.render(this.paradise.scene, this.paradise.camera);
-    else this.drunkFx.render(this.scene, this.camera, this.drunkView, this.elapsed);
+    if (this.paradise) {
+      this.renderer.toneMappingExposure = 1;
+      this.renderer.render(this.paradise.scene, this.paradise.camera);
+    } else this.drunkFx.render(this.scene, this.camera, this.drunkView, this.elapsed);
   }
 
   resize(w, h) {
@@ -1857,6 +1881,7 @@ export class Game {
     if (this.action && this.action.onCancel) this.action.onCancel();
     if (this.workshop) { this.workshop.dispose(); this.workshop = null; }
     this.police.dispose();
+    this.renderer.toneMappingExposure = 1; // il menu principale torna all'esposizione neutra
     this.escMenu.close();
     this.tabMenu.close();
     this.hud.hide();

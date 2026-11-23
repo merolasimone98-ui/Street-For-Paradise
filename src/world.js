@@ -188,15 +188,30 @@ function facadeTextures(style, rng) {
       if (rng() < 0.4) { e.fillStyle = '#d8ecff'; e.fillRect(0, r * rh + 14, W, 26); }
     }
   }
+  // Roughness map ricavata dal disegno (nessun numero casuale in più: il seed della città non cambia):
+  // i vetri delle finestre (zone scure) sono lisci e riflettono il cielo, i muri restano opachi.
+  const rough = makeCanvas(W, H);
+  const rgc = rough.getContext('2d');
+  const src = g.getImageData(0, 0, W, H).data;
+  const rimg = rgc.createImageData(W, H);
+  const glassCut = style === 'glass' ? 0.5 : 0.3;
+  for (let i = 0; i < W * H; i++) {
+    const l = (src[i * 4] * 0.299 + src[i * 4 + 1] * 0.587 + src[i * 4 + 2] * 0.114) / 255;
+    const r = l < glassCut ? 22 : style === 'industrial' ? 150 : 235;
+    rimg.data[i * 4] = rimg.data[i * 4 + 1] = rimg.data[i * 4 + 2] = r;
+    rimg.data[i * 4 + 3] = 255;
+  }
+  rgc.putImageData(rimg, 0, 0);
   const tMap = new THREE.CanvasTexture(map);
   tMap.colorSpace = THREE.SRGBColorSpace;
   const tEmi = new THREE.CanvasTexture(emi);
   tEmi.colorSpace = THREE.SRGBColorSpace;
-  for (const t of [tMap, tEmi]) {
+  const tRough = new THREE.CanvasTexture(rough);
+  for (const t of [tMap, tEmi, tRough]) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.anisotropy = 4;
   }
-  return { map: tMap, emissive: tEmi };
+  return { map: tMap, emissive: tEmi, rough: tRough };
 }
 
 function noiseTexture(base, variance, size = 256, repeat = 1, rng = Math.random, lines = false) {
@@ -226,6 +241,100 @@ function noiseTexture(base, variance, size = 256, repeat = 1, rng = Math.random,
   t.repeat.set(repeat, repeat);
   t.anisotropy = 8;
   return t;
+}
+
+/** Normal map tangente ricavata da un'immagine in scala di grigi (altezza = luminosità). */
+function normalMapFromCanvas(src, strength = 2) {
+  const W = src.width, H = src.height;
+  const sg = src.getContext('2d').getImageData(0, 0, W, H).data;
+  const out = makeCanvas(W, H);
+  const og = out.getContext('2d');
+  const img = og.createImageData(W, H);
+  const h = (x, y) => sg[(((y + H) % H) * W + ((x + W) % W)) * 4] / 255;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const dx = (h(x + 1, y) - h(x - 1, y)) * strength;
+    const dy = (h(x, y + 1) - h(x, y - 1)) * strength;
+    const len = Math.hypot(dx, dy, 1);
+    const i = (y * W + x) * 4;
+    img.data[i] = (-dx / len * 0.5 + 0.5) * 255;
+    img.data[i + 1] = (dy / len * 0.5 + 0.5) * 255;
+    img.data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
+    img.data[i + 3] = 255;
+  }
+  og.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(out); // dati lineari: nessuno spazio colore sRGB
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
+}
+
+/**
+ * Asfalto PBR procedurale: colore (graniglia, rattoppi, macchie d'olio), normal map dalla graniglia
+ * e roughness map con chiazze più lisce e lucide (usura e umidità) che riflettono il cielo.
+ */
+function asphaltTextures(rng, repeat) {
+  const S = 512;
+  const height = makeCanvas(S, S);
+  const hg = height.getContext('2d');
+  const himg = hg.createImageData(S, S);
+  for (let i = 0; i < S * S; i++) {
+    const v = 110 + (rng() - 0.5) * 120 + (rng() < 0.04 ? 70 : 0); // graniglia con sassolini
+    himg.data[i * 4] = himg.data[i * 4 + 1] = himg.data[i * 4 + 2] = THREE.MathUtils.clamp(v, 0, 255);
+    himg.data[i * 4 + 3] = 255;
+  }
+  hg.putImageData(himg, 0, 0);
+  const color = makeCanvas(S, S);
+  const cg = color.getContext('2d');
+  cg.drawImage(height, 0, 0);
+  cg.globalCompositeOperation = 'multiply';
+  cg.fillStyle = '#4a4c51';
+  cg.fillRect(0, 0, S, S);
+  cg.globalCompositeOperation = 'source-over';
+  const rough = makeCanvas(S, S);
+  const rg = rough.getContext('2d');
+  rg.fillStyle = 'rgb(235,235,235)';
+  rg.fillRect(0, 0, S, S);
+  for (let k = 0; k < 14; k++) {
+    // Rattoppi più scuri e lisci
+    const x = rng() * S, y = rng() * S, w = 30 + rng() * 90, h = 20 + rng() * 60;
+    cg.fillStyle = `rgba(20,20,22,${0.15 + rng() * 0.2})`;
+    cg.fillRect(x, y, w, h);
+    rg.fillStyle = `rgba(150,150,150,${0.5 + rng() * 0.3})`;
+    rg.fillRect(x, y, w, h);
+  }
+  for (let k = 0; k < 10; k++) {
+    // Macchie d'olio / pozzanghere: quasi a specchio
+    const x = rng() * S, y = rng() * S, r = 12 + rng() * 40;
+    const grd = cg.createRadialGradient(x, y, 0, x, y, r);
+    grd.addColorStop(0, 'rgba(8,8,10,0.45)');
+    grd.addColorStop(1, 'rgba(8,8,10,0)');
+    cg.fillStyle = grd;
+    cg.fillRect(x - r, y - r, r * 2, r * 2);
+    const rgr = rg.createRadialGradient(x, y, 0, x, y, r);
+    rgr.addColorStop(0, 'rgba(40,40,40,0.95)');
+    rgr.addColorStop(1, 'rgba(40,40,40,0)');
+    rg.fillStyle = rgr;
+    rg.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  // Crepe sottili
+  cg.strokeStyle = 'rgba(10,10,10,0.5)';
+  cg.lineWidth = 1.2;
+  for (let k = 0; k < 8; k++) {
+    let x = rng() * S, y = rng() * S;
+    cg.beginPath(); cg.moveTo(x, y);
+    for (let s = 0; s < 6; s++) { x += (rng() - 0.5) * 50; y += (rng() - 0.5) * 50; cg.lineTo(x, y); }
+    cg.stroke();
+  }
+  const map = new THREE.CanvasTexture(color);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const roughnessMap = new THREE.CanvasTexture(rough);
+  const normalMap = normalMapFromCanvas(height, 2.2);
+  for (const t of [map, roughnessMap, normalMap]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(repeat, repeat);
+    t.anisotropy = 8;
+  }
+  return { map, roughnessMap, normalMap };
 }
 
 function buildingGeometry(w, h, d) {
@@ -271,6 +380,7 @@ export class CityWorld {
     const homeRow = SPAWN_ROW[familyId] ?? 3;
     this.style = CITY_STYLE[city.id] || {};
     this.atms = [];
+    this.lampPoints = [];
     this.parkingSpots = [];
     this.dealerSpot = null;
     // Blocchi con edifici speciali. Le righe 0, 2 e 6 non ospitano mai la casa (righe 1, 3, 4, 5).
@@ -361,7 +471,7 @@ export class CityWorld {
   buildMaterials() {
     const rng = this.rng;
     this.styleMaterials = {};
-    this.roofMat = new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.95 });
+    this.roofMat = new THREE.MeshStandardMaterial({ color: 0x55585c, roughness: 0.92, metalness: 0.05 });
     const palette = this.city.palette;
     for (const style of ['glass', 'concrete', 'brick', 'industrial']) {
       const tex = facadeTextures(style, rng);
@@ -376,8 +486,10 @@ export class CityWorld {
           emissive: 0xffffff,
           emissiveMap: tex.emissive,
           emissiveIntensity: 0,
-          roughness: style === 'glass' ? 0.35 : 0.9,
-          metalness: style === 'glass' ? 0.35 : 0,
+          roughnessMap: tex.rough,
+          roughness: 1,
+          metalness: style === 'glass' ? 0.25 : style === 'industrial' ? 0.35 : 0,
+          envMapIntensity: style === 'glass' ? 1.3 : 1.0,
         });
         mats.push(m);
         this.windowMaterials.push(m);
@@ -396,10 +508,17 @@ export class CityWorld {
   buildGround() {
     // Asfalto su città e quartieri; il resto è terreno (vedi buildTerrain)
     const size = URBAN_HALF * 2 + 20;
-    const asphalt = noiseTexture(0x3b3d41, 26, 256, size / 12, this.rng);
+    // La vecchia texture consumava 256×256 numeri dal generatore della città: li scartiamo uguali,
+    // così la disposizione di edifici e porte resta identica e i salvataggi esistenti restano validi.
+    for (let i = 0; i < 256 * 256; i++) this.rng();
+    // Generatore separato per il nuovo asfalto PBR
+    const tex = asphaltTextures(seededRandom((this.seed ^ 0xa5fa17) >>> 0), size / 14);
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(size, size),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, map: asphalt, bumpMap: asphalt, bumpScale: 0.9, roughness: 0.9 }),
+      new THREE.MeshStandardMaterial({
+        color: 0xffffff, map: tex.map, normalMap: tex.normalMap, normalScale: new THREE.Vector2(0.7, 0.7),
+        roughnessMap: tex.roughnessMap, roughness: 1, metalness: 0, envMapIntensity: 0.9,
+      }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
@@ -970,6 +1089,8 @@ export class CityWorld {
       arms.setMatrixAt(i, m4);
       heads.setMatrixAt(i, m4);
       this.addStaticBox(x, SIDEWALK_H + 3, z, 0.15, 3, 0.15);
+      // Posizione della lampada (per le luci reali notturne vicino al giocatore)
+      this.lampPoints.push(new THREE.Vector3(x + Math.sin(rot) * 1.5, SIDEWALK_H + 5.6, z + Math.cos(rot) * 1.5));
     });
     poles.castShadow = true;
     this.root.add(poles, arms, heads);
@@ -1264,6 +1385,7 @@ export class CityWorld {
       this.addStaticBox(x, SIDEWALK_H + 2.5, z, 0.12, 2.5, 0.12);
     });
     inst(headGeo, this.lampHeadMat, lamps, (im, [x, z], i) => { m4.makeTranslation(x, SIDEWALK_H, z); im.setMatrixAt(i, m4); });
+    for (const [x, z] of lamps) this.lampPoints.push(new THREE.Vector3(x, SIDEWALK_H + 5.6, z + 1.5));
   }
 
   buildSky() {
@@ -1288,8 +1410,12 @@ export class CityWorld {
         void main() {
           float h = clamp(vDir.y * 1.6 + 0.08, 0.0, 1.0);
           vec3 col = mix(bottom, top, pow(h, 0.7));
+          // Foschia atmosferica: l'orizzonte è più chiaro e lattiginoso (prospettiva aerea)
+          float haze = exp(-max(vDir.y, 0.0) * 9.0);
+          col = mix(col, bottom * 1.1 + vec3(0.02), haze * 0.55);
           float s = max(dot(normalize(vDir), normalize(sunDir)), 0.0);
-          col += sunColor * (pow(s, 600.0) * 2.5 + pow(s, 12.0) * 0.25);
+          // Disco solare, alone vicino e diffusione ampia (Mie) più forte verso l'orizzonte
+          col += sunColor * (pow(s, 600.0) * 2.5 + pow(s, 12.0) * 0.25 + pow(s, 3.0) * 0.12 * haze);
           gl_FragColor = vec4(col, 1.0);
         }`,
       side: THREE.BackSide,
@@ -1372,12 +1498,46 @@ export class DayCycle {
     this.sun.shadow.mapSize.set(2048, 2048);
     const s = 70;
     Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 1, far: 400 });
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.bias = -0.0003;
+    this.sun.shadow.normalBias = 0.035;
+    this.shadowHalf = s;
     scene.add(this.sun, this.sun.target);
     this.fog = new THREE.Fog(0xcfe3f5, 60, 420);
     scene.fog = this.fog;
     this._dir = new THREE.Vector3();
+    this._snap = new THREE.Vector3();
+    this._lightM = new THREE.Matrix4();
+    this._lightInv = new THREE.Matrix4();
+    this._up = new THREE.Vector3(0, 1, 0);
+    this._origin = new THREE.Vector3();
+    this.exposure = 1;
+
+    // Luci reali dei lampioni: un piccolo gruppo di PointLight assegnate di notte ai lampioni più vicini
+    this.lampLights = [];
+    for (let i = 0; i < 6; i++) {
+      // Sempre nella scena (intensità 0 di giorno): cambiare il numero di luci visibili ricompila gli shader
+      const l = new THREE.PointLight(0xffc98a, 0, 22, 2);
+      l.position.set(0, -500, 0);
+      scene.add(l);
+      this.lampLights.push(l);
+    }
+    this.lampTimer = 0;
+
+    // Stelle (visibili solo di notte), agganciate al cielo
+    const starGeo = new THREE.BufferGeometry();
+    const pts = [];
+    const rnd = seededRandom(0x57a12 >>> 0);
+    for (let i = 0; i < 1400; i++) {
+      const u = rnd() * 2 - 1, th = rnd() * Math.PI * 2;
+      const y = Math.abs(u) * 0.95 + 0.05;
+      const r = Math.sqrt(1 - y * y);
+      pts.push(Math.cos(th) * r * 850, y * 850, Math.sin(th) * r * 850);
+    }
+    starGeo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    this.starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 2.2, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false });
+    this.stars = new THREE.Points(starGeo, this.starMat);
+    this.stars.frustumCulled = false;
+    world.sky.add(this.stars);
 
     this.palette = {
       nightTop: new THREE.Color(0x050914), nightBottom: new THREE.Color(0x141c33),
@@ -1441,6 +1601,8 @@ export class DayCycle {
       this.hemi.intensity = 0.08;
       this.hemi.color.set(0xffffff);
       this.fog.far = 2000;
+      this.exposure = 1;
+      for (const l of this.lampLights) l.intensity = 0;
       this.updateEnvironment(1, 0);
       return { day: 1, night: 0 };
     }
@@ -1463,11 +1625,23 @@ export class DayCycle {
     this.fog.near = 90;
     this.fog.far = 750 + day * 950;
 
-    // Sole (o luna) che segue il giocatore per le ombre
+    // Il cielo (con le stelle) è centrato sul giocatore: niente bordi visibili ai margini della mappa
+    this.world.sky.position.set(focus.x, 0, focus.z);
+    this.starMat.opacity = THREE.MathUtils.clamp((0.45 - day) * 2.2, 0, 0.9);
+
+    // Sole (o luna) che segue il giocatore per le ombre. Il centro della shadow camera viene agganciato
+    // alla griglia dei texel della shadow map nello spazio della luce: le ombre non "tremolano" camminando.
     const sunUp = elev > -0.05;
     const lightDir = sunUp ? this._dir : this._dir.clone().negate().setY(Math.abs(this._dir.y) + 0.3).normalize();
-    this.sun.position.set(focus.x + lightDir.x * 150, focus.y + lightDir.y * 150, focus.z + lightDir.z * 150);
-    this.sun.target.position.set(focus.x, focus.y, focus.z);
+    this._lightM.lookAt(this._origin, lightDir, this._up);
+    this._lightInv.copy(this._lightM).invert();
+    const texel = (this.shadowHalf * 2) / this.sun.shadow.mapSize.x;
+    this._snap.set(focus.x, focus.y, focus.z).applyMatrix4(this._lightInv);
+    this._snap.x = Math.round(this._snap.x / texel) * texel;
+    this._snap.y = Math.round(this._snap.y / texel) * texel;
+    this._snap.applyMatrix4(this._lightM);
+    this.sun.position.set(this._snap.x + lightDir.x * 150, this._snap.y + lightDir.y * 150, this._snap.z + lightDir.z * 150);
+    this.sun.target.position.copy(this._snap);
     this.sun.target.updateMatrixWorld();
     this.sun.intensity = sunUp ? 0.4 + day * 2.4 : 0.35;
     this.sun.color.setRGB(1, 0.75 + day * 0.2, 0.55 + day * 0.35);
@@ -1479,10 +1653,37 @@ export class DayCycle {
 
     // Finestre e lampioni accesi di sera
     const night = 1 - day;
-    for (const m of this.world.windowMaterials) m.emissiveIntensity = night * 0.95;
+    for (const m of this.world.windowMaterials) m.emissiveIntensity = night * 0.55;
     if (this.world.lampHeadMat) this.world.lampHeadMat.emissiveIntensity = night * 2.2;
     if (this.world.doorLampMat) this.world.doorLampMat.emissiveIntensity = 0.4 + night * 1.8;
+    this.updateLampLights(focus, night);
+    // Esposizione: un filo più alta di notte (l'occhio si adatta), più bassa a mezzogiorno pieno
+    this.exposure = 0.92 + night * 0.16 + dusk * 0.06;
     return { day, night };
+  }
+
+  /** Accende luci reali sui lampioni più vicini al giocatore (illuminano strada, auto e personaggi). */
+  updateLampLights(focus, night) {
+    const on = night > 0.35 && !this.indoor;
+    this.lampTimer -= 1 / 60;
+    if (on && this.lampTimer <= 0) {
+      this.lampTimer = 0.5;
+      const pts = this.world.lampPoints;
+      const best = [];
+      for (const p of pts) {
+        const d = (p.x - focus.x) ** 2 + (p.z - focus.z) ** 2;
+        if (d > 70 * 70) continue;
+        best.push([d, p]);
+      }
+      best.sort((a, b) => a[0] - b[0]);
+      this.lampLights.forEach((l, i) => {
+        const b = best[i];
+        if (b) l.position.copy(b[1]);
+        l.userData.active = !!b;
+      });
+    }
+    const k = on ? 38 * Math.min(1, (night - 0.35) * 2.5) : 0;
+    for (const l of this.lampLights) l.intensity = l.userData.active ? k : 0;
   }
 
   setShadows(enabled, size = 2048) {
@@ -1495,7 +1696,9 @@ export class DayCycle {
   }
 
   dispose() {
-    this.scene.remove(this.hemi, this.sun, this.sun.target);
+    this.scene.remove(this.hemi, this.sun, this.sun.target, ...this.lampLights);
+    this.stars.geometry.dispose();
+    this.starMat.dispose();
     this.scene.fog = null;
     this.scene.environment = null;
     if (this.envTarget) this.envTarget.dispose();

@@ -76,9 +76,11 @@ export function disposeObject3D(root) {
   if (!root) return;
   const textures = new Set();
   root.traverse((obj) => {
-    if (obj.geometry) obj.geometry.dispose();
+    // Le risorse dei modelli .glb sono condivise fra tutte le copie: non vanno liberate qui
+    if (obj.geometry && !obj.userData.sharedAsset) obj.geometry.dispose();
     const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
     for (const m of mats) {
+      if (m.userData && m.userData.sharedAsset) continue;
       for (const key of ['map', 'emissiveMap', 'specularMap', 'normalMap', 'roughnessMap', 'alphaMap', 'bumpMap']) {
         if (m[key]) textures.add(m[key]);
       }
@@ -88,5 +90,5 @@ export function disposeObject3D(root) {
       m.dispose();
     }
   });
-  textures.forEach((t) => t.dispose());
+  textures.forEach((t) => { if (!t.userData.sharedAsset) t.dispose(); });
 }

@@ -52,7 +52,8 @@ export function makePerson(opts = {}) {
   const hairStyle = opts.hairStyle || (sex === 'f' ? 'long' : 'short');
   const f = sex === 'f';
 
-  const mSkin = mat(skin, { roughness: 0.58 });
+  // Pelle: leggero "sheen" rossastro che imita la luce diffusa sotto la superficie (meno effetto plastica)
+  const mSkin = new THREE.MeshPhysicalMaterial({ color: skin, roughness: 0.55, metalness: 0, sheen: 0.35, sheenRoughness: 0.6, sheenColor: new THREE.Color(0xff9a7a) });
   const mShirt = mat(shirt, { roughness: 0.92 });
   const mPants = mat(pants, { roughness: 0.88 });
   const mShoe = mat(shoes, { roughness: 0.5 });

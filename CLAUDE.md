@@ -38,12 +38,26 @@ Gioco open-world 3D in terza persona ispirato a GTA IV, sviluppato interamente p
 - `src/drunk.js`: effetto visivo dell'ubriachezza (render target + shader ondulato/sdoppiato/colorato).
 - `src/settings.js`: impostazioni condivise (volume generale/musica/SFX, FOV, mouse, grafica) + modulo HTML riusato da menu principale e pausa.
 - `src/models.js`: modelli glTF/GLB opzionali elencati in `assets/models/manifest.json` (GLTFLoader + DRACO/KTX2/Meshopt r160 da `three/addons/`); sostituiscono la carrozzeria dei veicoli, con ritorno al modello procedurale se il file manca.
+- `src/traffic.js`: traffico NPC (auto, scooter, Vespe, moto con pilota) su corsie di destra con curve di Bézier agli incroci; semafori (`world.trafficPhase`), STOP, precedenze, distanza di sicurezza, fari/stop, clacson; corpi Cannon-es cinematici; si riposizionano attorno al giocatore.
+- `src/garage.js`: garage fisico di casa (4 box): consegne del concessionario, entrata/uscita guidando dalla serranda, veicoli custoditi fuori dalla fisica finché non entri.
+- `src/i18n.js` + `src/lang-en.js`: lingue IT/EN. Il codice scrive in italiano; un MutationObserver traduce al volo tutto il DOM con il dizionario (chiavi esatte + modelli `{*}`), date comprese. Le insegne 3D usano `tr()` quando vengono create.
 - `src/items.js`, `src/playerstate.js`, `src/save.js`, `src/input.js`, `src/ui.js`, `src/tween.js`: dati, stato, salvataggio, input e utilità.
 
 ## Convenzioni di gioco
 - Valuta: sempre **Euro (€)** tramite `formatMoney()` in `src/birthdata.js`.
 - Il protagonista inizia a 18 anni da **orfano**; i genitori compaiono nei ricordi del Paradiso.
-- `ESC` apre la mappa senza pausa (pulsante PAUSA in alto); `TAB` apre inventario + telefono; rotellina avanti fino in fondo = prima persona.
+- `ESC` apre la mappa senza pausa (pulsante PAUSA in alto); `TAB` apre solo l'inventario: il **telefono è un oggetto** (`telefono`, non si consuma né si regala) e si apre/ripone cliccandolo; rotellina avanti fino in fondo = prima persona.
+- Con un menu aperto o in pausa il veicolo guidato va **in folle** (nessun freno né retromarcia automatici).
+- Lingua: ogni nuovo testo va scritto in italiano **e** aggiunto a `src/lang-en.js` (con `{*}` per le parti variabili).
+- Felicità 0-100 (`state.happiness`, `changeHappiness`): barra sopra la minimappa; sale con cibo, pasti, sonno, opere buone, acquisti, tuning; scende con incidenti, ferite, arresti, svenimenti; tende al 50% nel tempo.
+- Cambio: impostazione `gearbox` (`auto`/`manual`, in manuale `E` su e `Q` giù), marce in `GEARS` (`vehicle.js`); tachimetro `speedUnit` (`kmh`/`mph`).
+- Garage: i veicoli comprati vanno nel garage di casa (`garage.store`), con `inGarage`/`bay`/`tune` salvati; tuning in `dialogs.tuning()` (vernice, cerchi, vetri, assetto, neon, motore stage 1-2, freni). Prezzi di servizi e tuning in `items.js` (`SERVICE_PRICES`, `TUNING`).
+- Moto/motorini: impennata con equilibrio (`wheelie`/`wheelieVel`, caduta oltre il limite → `bikeCrash`), stoppie con CTRL + freno (`stoppie`), piega fino a 0,88 rad; bici con pedalata (`pedalPhase`, guarnitura `crank`). Vespe in `VEHICLE_MODELS` (`style: 'vespa'`, la Special ha `gears: 4`, `spec` per modello).
+- Fari: `Vehicle.setLights(0|1|2, stop)` cambia solo l'emissione (nessuna luce aggiunta); `T` abbaglianti (SpotLight più lunga, pedoni abbagliati, auto che lampeggiano), `H` clacson per tipo di mezzo, `R` radio (4 stazioni procedurali in `audio.js`), prima persona in auto con abitacolo (`cockpit`).
+- Fisica: i collider statici piccoli/medi sono raggruppati in corpi composti per zona (`addStaticBox` in `world.js`); non creare migliaia di corpi singoli.
+- Polizia: vista 155 m / 85°, ricerca 30 s, una volante in più delle stelle, più veloci; `police.report` fa scappare i passanti (`npcs.panic`).
+- Case in vendita: interno diverso per casa (classico, loft, rustico, famiglia, design) scelto dall'id della casa.
+- Monumenti: al centro della **Piazza del Monumento** (`PLAZA` in `world.js`, terreno spianato), collisioni dalle parti `solid` di `landmarks.js`; vulcani/colline/mare restano sfondo oltre il confine. Semafori agli incroci del centro (`updateTraffic`), STOP/precedenza/limite 50 nei quartieri.
 - I veicoli non guidati diventano corpi **statici** in Cannon-es (non scivolano se urtati).
 - Tempo: **1 giorno di gioco = 1 ora reale** (`GAME_MINUTES_PER_SECOND = 0.4` in `game.js`); il giorno 1 è il 18° compleanno.
 - Aura: barra 1-100% in alto a sinistra; al 100% si sale di Livello (max 100) e la barra riparte dal 20%. 7 giorni senza chiesa = −5 Aura (poi −2/giorno); Messa nei giorni rossi = +5 extra.

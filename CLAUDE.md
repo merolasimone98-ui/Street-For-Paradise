@@ -37,6 +37,7 @@ Gioco open-world 3D in terza persona ispirato a GTA IV, sviluppato interamente p
 - `src/workshop.js`: officina meccanica (quiz di assunzione, turno con tuta, clienti con guasti, collega, minigiochi cavi/bulloni/calibrazione, computer).
 - `src/drunk.js`: effetto visivo dell'ubriachezza (render target + shader ondulato/sdoppiato/colorato).
 - `src/settings.js`: impostazioni condivise (volume generale/musica/SFX, FOV, mouse, grafica) + modulo HTML riusato da menu principale e pausa.
+- `src/models.js`: modelli glTF/GLB opzionali elencati in `assets/models/manifest.json` (GLTFLoader + DRACO/KTX2/Meshopt r160 da `three/addons/`); sostituiscono la carrozzeria dei veicoli, con ritorno al modello procedurale se il file manca.
 - `src/items.js`, `src/playerstate.js`, `src/save.js`, `src/input.js`, `src/ui.js`, `src/tween.js`: dati, stato, salvataggio, input e utilità.
 
 ## Convenzioni di gioco
@@ -52,8 +53,23 @@ Gioco open-world 3D in terza persona ispirato a GTA IV, sviluppato interamente p
 - Crimini → `game.police.report(stelle, motivo)`.
 - Mappa: città centrale + 4 anelli di quartieri residenziali (`RINGS`), colline, lago e montagne (heightfield Cannon-es allineato alla mesh del terreno). Non cambiare la sequenza RNG della città: romperebbe i salvataggi.
 
+## Standard tecnici di rendering (Three.js r160 via CDN, niente bundler)
+- **Versioni bloccate:** `three@0.160.0` e `cannon-es@0.20.0` nell'importmap. Non aggiornare senza richiesta esplicita (in r160 `THREE.Timer` non è nel core: si usa il delta di `performance.now()`).
+- **Un solo loop:** `renderer.setAnimationLoop(frame)` in `main.js`; delta in secondi limitato a [0, 0.05] e azzerato al ritorno da una scheda nascosta. Lo stato di gioco vive in oggetti JS; le mesh sono solo la "vista".
+- **Contesto WebGL:** gestire `webglcontextlost` (preventDefault, salta i fotogrammi) e `webglcontextrestored`; non tenere oggetti GL grezzi.
+- **Risoluzione:** pixel ratio massimo 1,5 (Alta), 1,25 (Media), 0,85 (Bassa) tramite `pixelRatioFor()`.
+- **Colore e tone mapping:** `outputColorSpace = SRGBColorSpace`, `ACESFilmicToneMapping`; esposizione regolata dal ciclo giorno/notte (`DayCycle.exposure`). Le texture di colore sono sRGB; normal/roughness map restano lineari.
+- **Materiali PBR:** `MeshStandardMaterial` / `MeshPhysicalMaterial` con roughness/metalness sensati; carrozzerie con `clearcoat`, vetri lisci con `ior`; asfalto e facciate con roughness map (e normal map) procedurali da canvas. Mai `MeshBasicMaterial` per oggetti illuminati (solo cielo, insegne, effetti).
+- **Environment map:** `scene.environment` generato dal cielo con `PMREMGenerator` (rigenerato solo quando la luce cambia abbastanza); ambiente dedicato negli interni.
+- **Ombre:** un'unica `DirectionalLight` con `PCFSoftShadowMap`, shadow camera ortografica ±70 m centrata sul giocatore e agganciata alla griglia dei texel (niente tremolio), `bias`/`normalBias` calibrati.
+- **Luci dinamiche:** numero di luci costante (mai cambiare `visible` o aggiungere/rimuovere luci a runtime: ricompila gli shader). Le luci notturne (lampioni vicini, fari) restano in scena con intensità 0 di giorno.
+- **Cloni e risorse:** ogni modello animato ha il proprio `HumanAnimator`; geometrie condivise solo se immutabili; liberare geometrie, materiali e texture con `disposeObject3D` quando si smonta una scena.
+- **Modelli glTF:** un solo `GLTFLoader` condiviso, decoder dalla stessa release (`three@0.160.0/examples/jsm/libs/...`), addon importati in modo dinamico (se il CDN fallisce si resta sul procedurale). Copie con `SkeletonUtils.clone` e un `AnimationMixer` per copia aggiornato in secondi; risorse del file marcate `userData.sharedAsset` (mai liberate dalle copie). Il modello si scala sulla lunghezza del corpo fisico, base a y = 0, centrato in X/Z; le ruote del file vanno sotto perni centrati. `assets/models/manifest.json` deve sempre esistere (anche vuoto) per non avere 404 in console.
+- **Verifica runtime:** aprire con `#debug` (espone `window.sfp` e `window.renderer`), controllare console senza errori, `renderer.info.render.calls > 0` e screenshot di giorno e di notte.
+
 ## Regole Ferree per Claude
 1. **ZERO errori di import:** Usa sempre `<script type="importmap">` in `index.html` con URL CDN funzionanti e testati (es. `unpkg` o `jsdelivr`).
 2. **Modularità:** Non mettere mai tutto il codice in un solo file; rispetta rigorosamente la divisione in `/src`.
 3. **Fisica sincronizzata:** Ogni oggetto 3D visibile (mesh) deve corrispondere esattamente al suo corpo fisico (body) in Cannon-es.
 4. **Incrementalità:** Costruisci una meccanica alla volta e assicurati che il codice sia completo, senza `// TODO` o parti tagliate.
+5. **Consegna:** alla fine di ogni aggiornamento manda sempre lo zip completo del progetto (`street-for-paradise.zip`: file della cartella principale + `src/` + `assets/`), pronto da estrarre e caricare su GitHub.

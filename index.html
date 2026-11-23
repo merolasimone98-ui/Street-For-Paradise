@@ -76,8 +76,14 @@
           <span class="btn-main-label">IMPOSTAZIONI</span>
           <span class="btn-main-arrow">⚙</span>
         </button>
+        <button id="btn-credits" class="btn-main btn-sub" type="button">
+          <span class="btn-main-label">CREDITI</span>
+          <span class="btn-main-arrow">✦</span>
+        </button>
       </div>
     </div>
+    <!-- Selettore lingua (in alto a destra) -->
+    <button id="btn-lang" class="btn-lang" type="button" aria-label="Lingua / Language"><span class="lang-flag" id="lang-flag"></span><span class="lang-name" id="lang-name">ITALIANO</span></button>
     <div class="menu-footer">
       <span>Premi <kbd>INVIO</kbd> per giocare</span>
       <span class="menu-version">v0.1 · Three.js + Cannon-es</span>
@@ -89,6 +95,20 @@
     <div class="ms-box">
       <div class="ms-head"><div class="ms-title">Impostazioni</div><button class="btn-ghost small" data-close type="button">Chiudi</button></div>
       <div id="menu-settings-form"></div>
+    </div>
+  </section>
+
+  <!-- CREDITI -->
+  <section id="menu-credits" class="hidden" aria-label="Crediti">
+    <div class="ms-box credits-box">
+      <div class="ms-head"><div class="ms-title">Crediti</div><button class="btn-ghost small" data-close type="button">Chiudi</button></div>
+      <div class="credits-body">
+        <div class="credits-logo">STREET <em>for</em> PARADISE</div>
+        <div class="credits-role">Fondatore</div>
+        <div class="credits-names">Giuseppe Merola, Simone Merola</div>
+        <div class="credits-line"></div>
+        <p class="muted">Grazie per aver giocato.</p>
+      </div>
     </div>
   </section>
 
@@ -221,12 +241,19 @@
       <div class="hud-date" id="hud-date">—</div>
       <div class="hud-save" id="hud-save">Salvataggio…</div>
     </div>
+    <!-- Felicità (sopra la minimappa) -->
+    <div class="hud-happy" id="hud-happy">
+      <div class="hud-aura-head"><span><i id="hud-happy-ico">🙂</i> FELICITÀ</span><b id="hud-happy-v">60%</b></div>
+      <div class="hud-happy-track"><i id="hud-happy-bar"></i></div>
+    </div>
     <div class="hud-minimap" id="minimap-wrap"><canvas id="minimap" width="180" height="180"></canvas></div>
-    <div class="hud-help">WASD muovi · SHIFT corri · SPAZIO salta · E interagisci · 1-4 rispondi · F veicolo · SHIFT in moto impenna · tasto destro mira · TAB inventario · C scheda · ESC menu</div>
+    <div class="hud-help">WASD muovi · SHIFT corri · SPAZIO salta · E interagisci · F veicolo · SHIFT impenna · CTRL+S stoppie · H clacson · T abbaglianti · R radio · tasto destro mira · TAB inventario · ESC menu</div>
 
     <!-- Salute e stamina (in basso a destra) -->
     <div class="hud-vitals">
-      <div class="hud-speed hidden" id="hud-speed"><b id="hud-speed-v">0</b><span>km/h</span><small id="hud-speed-name"></small>
+      <div class="hud-speed hidden" id="hud-speed">
+        <div class="hud-gear hidden" id="hud-gear"><small id="hud-gear-mode">AUTO</small><b id="hud-gear-v">1</b><div class="hud-rpm-track"><i id="hud-rpm"></i></div></div>
+        <b id="hud-speed-v">0</b><span id="hud-speed-unit">km/h</span><em class="hud-beam hidden" id="hud-beam" title="Abbaglianti">◉ ABB</em><small id="hud-speed-name"></small>
         <div class="veh-health"><span>🔧</span><div class="veh-track"><i id="hud-veh-bar"></i></div><b id="hud-veh-v">100%</b></div>
       </div>
       <div class="vital"><span class="vital-ico">♥</span><div class="vital-bar health"><i id="vital-health"></i></div><b id="vital-health-v">100</b></div>
@@ -236,6 +263,11 @@
     <div id="interact-prompt" class="hidden">
       <div id="prompt-e">Premi <kbd>E</kbd> per <span id="prompt-e-text"></span></div>
       <div id="prompt-f" class="hidden">Premi <kbd>F</kbd> per <span id="prompt-f-text"></span></div>
+    </div>
+    <!-- Equilibrio in impennata / stoppie: tieni la lancetta nella zona verde -->
+    <div class="hud-balance hidden" id="hud-balance">
+      <div class="bal-head"><span id="hud-balance-label">IMPENNATA</span><small>dosa SHIFT · oltre il rosso cadi</small></div>
+      <div class="bal-track"><i class="bal-zone"></i><i class="bal-danger"></i><b id="hud-balance-needle"></b></div>
     </div>
     <!-- Puntino di mira (pistola + tasto destro) -->
     <div id="crosshair" class="hidden"></div>
@@ -290,6 +322,9 @@
         <span><kbd>ROTELLA</kbd> Zoom</span>
         <span><kbd>E</kbd> Interagisci</span>
         <span><kbd>F</kbd> Sali / scendi dal veicolo</span>
+        <span><kbd>E</kbd><kbd>Q</kbd> Marcia su / giù (cambio manuale)</span>
+        <span><kbd>SHIFT</kbd> Impennata · <kbd>CTRL</kbd>+<kbd>S</kbd> Stoppie</span>
+        <span><kbd>H</kbd> Clacson · <kbd>T</kbd> Abbaglianti · <kbd>R</kbd> Radio</span>
         <span><kbd>TAB</kbd> Inventario · Telefono</span>
         <span><kbd>C</kbd> Scheda</span>
         <span><kbd>ESC</kbd> Mappa · Menu</span>

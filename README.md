@@ -20,15 +20,32 @@ Poi apri `http://localhost:8080`. I moduli ES6 non funzionano aprendo `index.htm
 | Mouse / rotella | Camera / zoom |
 | E | Interagisci: porte, negozi, sportelli, ATM, tavoli, letto, persone |
 | F | Sali/scendi dal veicolo, forza la serratura (serve il cacciavite speciale) |
-| TAB | Inventario · Portafoglio · Telefono |
+| TAB | Inventario · Portafoglio (il telefono si apre cliccando l'oggetto 📱 Telefono) |
+| E / Q (cambio manuale) | Marcia su / marcia giù |
+| Shift (moto/motorino) | Impennata: dosala, se esageri ti ribalti |
+| Ctrl sinistro + S | Stoppie (ruota posteriore sollevata) |
+| H | Clacson (tocco breve o tenuto premuto) |
+| T | Abbaglianti |
+| R (in auto) | Radio: cambia stazione / spegni |
+| Rotella avanti (in auto) | Prima persona con abitacolo |
 | ESC | Mappa · Impostazioni · Statistiche (Aura) |
 | C | Scheda personaggio |
 | V (tenuto premuto) | Salta la panoramica 0-18 anni |
 
+## Novità
+
+- **Lingua** italiano / inglese dal pulsante con la bandiera in alto a destra nel menu (anche nelle Impostazioni): tutto il gioco si traduce subito.
+- **Crediti** nel menu principale, sotto Impostazioni.
+- **Impostazioni di guida**: cambio automatico o manuale, tachimetro in km/h o mph.
+- **Felicità**: barra sopra la minimappa.
+- **Garage di casa** (G sulla mappa, accanto alla porta di casa): i veicoli comprati arrivano qui; entra a piedi (E) o guidando piano verso la serranda, fai tuning (vernice, cerchi, vetri, assetto, neon, motore, freni) ed esci guidando oltre la serranda.
+- **Piazza del Monumento** a nord della città con il monumento tipico della tua città (solido, raggiungibile in auto o in taxi), semafori in centro e cartelli nei quartieri.
+
 ## Cosa c'è in città
 
-Casa, Ospedale, Minimarket, Concessionario, Armeria, Boutique, 2 Farmacie, Banca con ATM, Trattoria, Pizzeria,
-Chiesa, Stazione di Polizia, Locale, bancomat sui marciapiedi, pedoni, senzatetto e veicoli parcheggiati.
+Casa con garage, Ospedale, Minimarket, Concessionario, Armeria, Boutique, 2 Farmacie, Banca con ATM, Trattoria, Pizzeria,
+Chiesa, Stazione di Polizia, Locale, Officina, case in vendita (interni diversi), Piazza del Monumento, bancomat sui marciapiedi,
+pedoni, senzatetto e veicoli parcheggiati.
 
 ## Struttura
 

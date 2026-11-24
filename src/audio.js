@@ -218,12 +218,30 @@ class AudioEngine {
   }
 
   /* ---------- Corpo ---------- */
+  /**
+   * Passi: tallone + punta (due colpi ravvicinati), timbro e coda diversi per superficie:
+   * asfalto ruvido, marciapiede, legno che risuona, piastrelle secche, erba frusciante, marmo con eco.
+   */
   footstep(surface = 'asphalt', running = false) {
-    const f = { asphalt: 1500, sidewalk: 2200, wood: 900, tile: 3000, grass: 700, marble: 3400 }[surface] || 1500;
+    const S = {
+      asphalt: { f: 1500, q: 0.6, grit: 0.35, ring: 0, rev: 0 },
+      sidewalk: { f: 2200, q: 0.7, grit: 0.25, ring: 0, rev: 0 },
+      wood: { f: 900, q: 1.2, grit: 0.05, ring: 210, rev: 0.15 },
+      tile: { f: 3000, q: 1.5, grit: 0.05, ring: 1800, rev: 0.2 },
+      grass: { f: 700, q: 0.4, grit: 0.7, ring: 0, rev: 0 },
+      marble: { f: 3400, q: 1.8, grit: 0.02, ring: 2400, rev: 0.45 },
+    }[surface] || { f: 1500, q: 0.6, grit: 0.3, ring: 0, rev: 0 };
     const g = running ? 0.16 : 0.09;
-    this.burst({ dur: running ? 0.09 : 0.07, gain: g, type: 'lowpass', freq: f * rand(0.85, 1.15), q: 0.6 });
+    const f = S.f * rand(0.85, 1.15);
+    // Tallone
+    this.burst({ dur: running ? 0.08 : 0.06, gain: g, type: 'lowpass', freq: f, q: S.q, reverb: S.rev });
     this.tone({ type: 'sine', freq: rand(70, 95), freqEnd: 45, dur: 0.06, gain: g * 0.9 });
-    if (surface === 'wood') this.tone({ type: 'triangle', freq: rand(180, 230), dur: 0.05, gain: g * 0.3 });
+    // Punta (un attimo dopo, più leggera)
+    this.burst({ start: running ? 0.03 : 0.05, dur: 0.04, gain: g * 0.55, type: 'bandpass', freq: f * 1.3, q: S.q, reverb: S.rev });
+    // Granelli / fruscio (asfalto ed erba)
+    if (S.grit > 0.1) this.burst({ start: 0.01, dur: 0.09, gain: g * S.grit * 0.5, type: 'highpass', freq: surface === 'grass' ? 2500 : 4500 });
+    // Risonanza del materiale (legno, piastrelle, marmo)
+    if (S.ring) this.tone({ type: 'triangle', freq: S.ring * rand(0.95, 1.05), dur: surface === 'wood' ? 0.06 : 0.035, gain: g * 0.25, reverb: S.rev });
   }
   jump() { this.burst({ dur: 0.22, gain: 0.07, type: 'bandpass', freq: 600, freqEnd: 1800, q: 1.2 }); }
   land(intensity = 1) {
@@ -478,9 +496,17 @@ class AudioEngine {
       const amG = c.createGain(); amG.gain.value = kind === 'moto' || kind === 'scooter' ? 0.35 : 0.15;
       const amBias = c.createGain(); amBias.gain.value = 1;
       am.connect(amG).connect(mix.gain);
-      [o1, o2, sub, am].forEach((n) => n.start());
-      e.nodes.push(o1, o2, sub, am);
-      Object.assign(e, { o1, o2, sub, am, filter: f });
+      // Armonico superiore (ronzio meccanico ai giri alti) e aspirazione/scarico (rumore filtrato che segue i giri)
+      const o3 = c.createOscillator(); o3.type = 'triangle';
+      const o3g = c.createGain(); o3g.gain.value = 0.0001;
+      o3.connect(o3g).connect(out);
+      const intake = c.createBufferSource(); intake.buffer = this.noiseBuf; intake.loop = true;
+      const inF = c.createBiquadFilter(); inF.type = 'bandpass'; inF.frequency.value = 400; inF.Q.value = 1.4;
+      const inG = c.createGain(); inG.gain.value = 0.0001;
+      intake.connect(inF).connect(inG).connect(out);
+      [o1, o2, sub, am, o3, intake].forEach((n) => n.start());
+      e.nodes.push(o1, o2, sub, am, o3, intake);
+      Object.assign(e, { o1, o2, sub, am, filter: f, o3, o3g, inF, inG, lastRpm: 0 });
       void amBias;
     }
     this.engines.set(id, e);
@@ -519,6 +545,14 @@ class AudioEngine {
     e.filter.frequency.setTargetAtTime((e.kind === 'scooter' ? 1500 : 500) + rpm * (throttle ? 2200 : 1100), t, 0.08);
     const vol = (e.kind === 'scooter' ? 0.07 : e.kind === 'moto' ? 0.12 : 0.1) * (0.55 + rpm * 0.6 + (throttle ? 0.25 : 0));
     e.out.gain.setTargetAtTime(vol * level, t, 0.08);
+    // Armonico e aspirazione: crescono con i giri e con il gas
+    e.o3.frequency.setTargetAtTime(f * 2.02, t, 0.06);
+    e.o3g.gain.setTargetAtTime((0.02 + rpm * 0.08) * (e.kind === 'sport' || e.kind === 'moto' ? 1.4 : 1), t, 0.08);
+    e.inF.frequency.setTargetAtTime(300 + rpm * (e.kind === 'scooter' ? 2600 : 1800), t, 0.08);
+    e.inG.gain.setTargetAtTime((throttle ? 0.18 : 0.06) * (0.3 + rpm), t, 0.1);
+    // Cambiata: il regime crolla di colpo → breve "sbuffo" dello scarico
+    if (e.lastRpm - inGear > 0.35 && level > 0.5) this.burst({ dur: 0.12, gain: 0.05, type: 'lowpass', freq: 700, brown: true });
+    e.lastRpm = inGear;
   }
 
   engineStop(id, silent = false) {
@@ -542,6 +576,8 @@ class AudioEngine {
     this.chainsaw(false);
     this.hornStop();
     this.radioStop();
+    this.heartMonitor(false);
+    if (this.fountainGain) this.fountainGain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.1);
     for (const name of ['crowd', 'city', 'wind']) this.setLoopLevel(name, 0, () => null);
   }
 
@@ -671,6 +707,175 @@ class AudioEngine {
     h.out.gain.setTargetAtTime(0.0001, minEnd, 0.025);
     for (const o of h.nodes) o.stop(minEnd + 0.2);
     setTimeout(() => { try { h.out.disconnect(); } catch (e) { /* già scollegato */ } }, 600);
+  }
+
+  /* ---------- Ospedale ---------- */
+  /** Barella: ruote che sferragliano sul pavimento, cigolii e passi dei paramedici. */
+  stretcher(seconds = 6) {
+    if (!this.ready) return;
+    const steps = Math.floor(seconds / 0.13);
+    for (let i = 0; i < steps; i++) {
+      const t = i * 0.13 + rand(0, 0.03);
+      this.burst({ start: t, dur: 0.05, gain: 0.035, type: 'bandpass', freq: rand(2200, 3400), q: 5 });
+      if (i % 4 === 0) this.burst({ start: t, dur: 0.08, gain: 0.05, type: 'lowpass', freq: 600, brown: true });
+      if (i % 9 === 0) this.tone({ type: 'triangle', freq: rand(1100, 1400), freqEnd: rand(900, 1000), start: t, dur: 0.18, gain: 0.012 });
+    }
+  }
+
+  /** Monitor cardiaco: bip regolari finché è acceso. */
+  heartMonitor(on) {
+    if (this.monitorTimer) { clearInterval(this.monitorTimer); this.monitorTimer = null; }
+    if (!on || !this.ready) return;
+    const beep = () => this.tone({ type: 'sine', freq: 1046, dur: 0.12, gain: 0.05, attack: 0.004 });
+    beep();
+    this.monitorTimer = setInterval(beep, 850);
+  }
+
+  /* ---------- Chiesa ---------- */
+  /** Campane: rintocchi con armonici inarmonici (come una campana vera) e lunga coda. */
+  churchBells(rings = 4) {
+    if (!this.ready) return;
+    const base = [392, 330];
+    for (let i = 0; i < rings; i++) {
+      const f = base[i % 2];
+      const t = i * 1.1;
+      for (const [mul, g, d] of [[0.5, 0.05, 4], [1, 0.07, 3.5], [1.2, 0.03, 2.5], [1.5, 0.025, 2], [2, 0.03, 1.8], [2.76, 0.015, 1.2]]) {
+        this.tone({ type: 'sine', freq: f * mul, start: t, dur: d, gain: g, attack: 0.003, reverb: 0.6 });
+      }
+    }
+  }
+
+  /** Coro: vocali "aah" con formanti (filtri) e leggero vibrato, accordi lenti. */
+  choir(seconds = 6) {
+    if (!this.ready) return;
+    const c = this.ctx;
+    const midi = (n) => 440 * Math.pow(2, (n - 69) / 12);
+    const chords = [[57, 61, 64, 69], [55, 59, 62, 67], [57, 60, 64, 69]];
+    const len = seconds / chords.length;
+    chords.forEach((ch, k) => {
+      const t0 = this.t + k * len;
+      for (const n of ch) {
+        const o = c.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = midi(n);
+        const vib = c.createOscillator(); vib.frequency.value = 5 + Math.random();
+        const vg = c.createGain(); vg.gain.value = 3;
+        vib.connect(vg).connect(o.detune);
+        const f1 = c.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 800; f1.Q.value = 6;
+        const f2 = c.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = 1150; f2.Q.value = 8;
+        const g = c.createGain();
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.linearRampToValueAtTime(0.03, t0 + len * 0.4);
+        g.gain.linearRampToValueAtTime(0.0001, t0 + len + 0.6);
+        o.connect(f1).connect(g);
+        o.connect(f2).connect(g);
+        g.connect(this.sfxBus);
+        const send = c.createGain(); send.gain.value = 0.8;
+        g.connect(send).connect(this.reverbSend);
+        o.start(t0); vib.start(t0);
+        o.stop(t0 + len + 0.8); vib.stop(t0 + len + 0.8);
+      }
+    });
+  }
+
+  /** Accendino e fiammella della candela. */
+  candle() {
+    this.burst({ dur: 0.06, gain: 0.08, type: 'highpass', freq: 5000 });
+    this.burst({ start: 0.08, dur: 0.5, gain: 0.04, type: 'bandpass', freq: 1200, q: 0.7 });
+  }
+
+  /** Scatto della telecamera del semaforo (T-red): clic dell'otturatore e fischio del flash che si ricarica. */
+  cameraFlash() {
+    if (!this.ready) return;
+    this.burst({ dur: 0.025, gain: 0.12, type: 'highpass', freq: 3500 });
+    this.burst({ start: 0.06, dur: 0.03, gain: 0.08, type: 'highpass', freq: 2800 });
+    this.tone({ type: 'sine', freq: 2400, freqEnd: 5200, start: 0.1, dur: 0.6, gain: 0.025 });
+  }
+
+  /** Fontana: scroscio d'acqua continuo (volume 0 = spento). Chiamato ogni fotogramma con la distanza. */
+  fountain(volume) {
+    if (!this.ready) return;
+    if (!this.fountainSrc) {
+      const c = this.ctx;
+      const src = c.createBufferSource();
+      src.buffer = this.noiseBuf;
+      src.loop = true;
+      const f = c.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 1800;
+      f.Q.value = 0.5;
+      const g = c.createGain();
+      g.gain.value = 0;
+      src.connect(f).connect(g).connect(this.sfxBus);
+      src.start();
+      this.fountainSrc = src;
+      this.fountainGain = g;
+    }
+    this.fountainGain.gain.setTargetAtTime(Math.max(0, Math.min(0.12, volume * 0.12)), this.ctx.currentTime, 0.2);
+  }
+
+  /* ---------- Barbiere ---------- */
+  /** Forbici: coppie di "snip" metallici a ritmo irregolare. */
+  scissors(seconds = 4) {
+    if (!this.ready) return;
+    let t = 0;
+    while (t < seconds) {
+      this.burst({ start: t, dur: 0.03, gain: 0.07, type: 'highpass', freq: 6000 });
+      this.tone({ type: 'triangle', freq: rand(4200, 5200), start: t, dur: 0.04, gain: 0.02 });
+      this.burst({ start: t + 0.09, dur: 0.03, gain: 0.06, type: 'highpass', freq: 6500 });
+      t += rand(0.22, 0.5);
+    }
+  }
+
+  /** Rasoio elettrico / tosatrice: ronzio a 120 Hz con armonici. */
+  clipper(seconds = 3) {
+    if (!this.ready) return;
+    this.tone({ type: 'sawtooth', freq: 118, dur: seconds, gain: 0.035, attack: 0.05, release: seconds });
+    this.tone({ type: 'square', freq: 236, dur: seconds, gain: 0.012, attack: 0.05, release: seconds });
+    this.burst({ dur: seconds, gain: 0.02, type: 'bandpass', freq: 3800, q: 2 });
+  }
+
+  /* ---------- Varie ---------- */
+  /** Sostanze: risucchio distorto e battito accelerato. */
+  drugs() {
+    if (!this.ready) return;
+    this.tone({ type: 'sine', freq: 90, freqEnd: 900, dur: 1.4, gain: 0.05, reverb: 0.7 });
+    this.tone({ type: 'triangle', freq: 1200, freqEnd: 140, start: 0.3, dur: 1.6, gain: 0.03, reverb: 0.7 });
+    for (let i = 0; i < 6; i++) this.tone({ type: 'sine', freq: 60, start: 0.6 + i * 0.32, dur: 0.12, gain: 0.08 });
+  }
+
+  /**
+   * Ambiente cittadino: eventi lontani e casuali sopra il brusio continuo (clacson in lontananza,
+   * una sirena, un cane che abbaia, un motorino che passa, campane a mezzogiorno).
+   */
+  cityEvents(dt, active, hour = 12) {
+    if (!this.ready || !active) return;
+    this.cityT = (this.cityT ?? 6) - dt;
+    if (this.cityT > 0) return;
+    this.cityT = rand(5, 14);
+    const r = Math.random();
+    const night = hour < 6 || hour > 21;
+    if (r < 0.3) this.npcHorn(Math.random() < 0.5 ? 'car' : 'scooter', rand(40, 65));
+    else if (r < 0.42) {
+      // Sirena lontana che sale e scende
+      for (let i = 0; i < 3; i++) this.tone({ type: 'triangle', freq: 700, freqEnd: 1000, start: i * 0.9, dur: 0.85, gain: 0.012, reverb: 0.5 });
+    } else if (r < 0.62) {
+      // Cane che abbaia
+      for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
+        this.tone({ type: 'sawtooth', freq: rand(320, 420), freqEnd: 180, start: i * 0.35, dur: 0.14, gain: 0.02, reverb: 0.3 });
+        this.burst({ start: i * 0.35, dur: 0.1, gain: 0.015, type: 'bandpass', freq: 900, q: 2 });
+      }
+    } else if (r < 0.85 && !night) {
+      // Motorino che passa in lontananza (effetto Doppler)
+      this.tone({ type: 'square', freq: 190, freqEnd: 140, dur: 2.2, gain: 0.012, attack: 0.8, release: 2.2 });
+    } else if (Math.abs(hour - 12) < 0.25) this.churchBells(3);
+  }
+
+  /** Esultanza (dono generoso). */
+  cheer() {
+    if (!this.ready) return;
+    this.voice(false, 6);
+    for (let i = 0; i < 3; i++) this.burst({ start: 0.2 + i * 0.12, dur: 0.05, gain: 0.05, type: 'bandpass', freq: 2500, q: 1 });
   }
 
   /** Clacson di un automobilista NPC (doppio colpo, volume in base alla distanza). */

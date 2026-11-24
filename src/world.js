@@ -4,6 +4,7 @@ import * as CANNON from 'cannon-es';
 import { seededRandom } from './birthdata.js';
 import { buildLandmark, CITY_STYLE } from './landmarks.js';
 import { tr } from './i18n.js';
+import { makeFountain, makeShrine } from './sacred.js';
 
 export const BLOCK = 44;
 export const ROAD = 14;
@@ -17,7 +18,10 @@ export const PLAY_EDGE = 690; // confine giocabile (campagna e colline comprese)
 export const WORLD_EXT = PLAY_EDGE + 20; // estensione usata da minimappa e mappa grande
 const TERRAIN_ES = 10; // passo della griglia del terreno (fisica e grafica coincidono)
 const LAKE = { x: -560, z: 120, r: 75 };
-const SIDEWALK_H = 0.2;
+/** Punto del "burrone" (allucinazioni alla guida): sopra la conca del lago, lontano dalla città. */
+export const LAKE_SPOT = { x: LAKE.x + LAKE.r + 30, z: LAKE.z, heading: -Math.PI / 2 };
+// Gradino del marciapiede: basso (12 cm) per salirci a piedi e coi veicoli senza incastrarsi
+export const SIDEWALK_H = 0.12;
 /**
  * Piazza del Monumento: a nord della città, in campagna, collegata alla strada nord-sud x = PLAZA.x.
  * Il terreno viene spianato sotto la piazza e lungo la strada d'accesso (vedi terrainHeight).
@@ -97,6 +101,8 @@ export const BUILDING_TYPES = {
   house: { name: 'Casa in vendita', sign: null, w: 12, d: 10, h: 7 },
   workshop: { name: 'Officina Meccanica', sign: 'OFFICINA', signColor: '#ffb347', signBg: 'rgba(28,18,6,0.95)', w: 26, d: 18, h: 8, style: 'industrial' },
   homegarage: { name: 'Garage di casa', sign: null, w: 4.4, d: 1 },
+  barber: { name: 'Salone di bellezza', sign: '✂ BARBIERE', signColor: '#ff9ad5', signBg: 'rgba(30,10,24,0.95)', w: 11, d: 9 },
+  helmets: { name: 'Caschi & Moto Store', sign: 'CASCHI · MOTO', signColor: '#ffd24a', signBg: 'rgba(20,16,6,0.95)', w: 12, d: 10 },
 };
 
 /** Icone/colori per minimappa e mappa grande. */
@@ -108,7 +114,8 @@ export const MAP_ICONS = {
   police: { color: '#8fc0ff', letter: 'Π' }, atm: { color: '#7fd0ff', letter: '€' },
   cathedral: { color: '#fff3c4', letter: '✝' }, chapel: { color: '#ffffff', letter: '†' }, house: { color: '#9be37a', letter: '⌂' },
   workshop: { color: '#ffb347', letter: 'O' }, homegarage: { color: '#f0b43c', letter: 'G' },
-  monument: { color: '#e8d9b0', letter: '★' },
+  monument: { color: '#e8d9b0', letter: '★' }, barber: { color: '#ff9ad5', letter: '✂' }, helmets: { color: '#ffd24a', letter: 'K' },
+  fountain: { color: '#7fd0ff', letter: '≈' }, madonna: { color: '#9fc4ff', letter: 'M' }, crucifix: { color: '#ffe2b0', letter: '✝' },
 };
 
 function signTexture(text, color, bg) {
@@ -443,6 +450,285 @@ export class CityWorld {
     this.buildPlaza();
     this.buildHomeGarage();
     this.buildTraffic();
+    this.buildBarber();
+    this.buildShopFront('helmets', 45);
+    this.pickDealerSpots();
+    this.buildSacredSites();
+  }
+
+  /* ---------- Chiese decorate, alberi, fontane, Madonna e crocifisso in città ---------- */
+  /**
+   * Aggiunte dopo la città (generatore separato dal seme: la disposizione della città e i salvataggi non cambiano):
+   * portali, contrafforti, vetrate e alberi attorno a chiese e cattedrali; alberi lungo il viale della piazza;
+   * due fontane (piazza e parco alberato); una statua della Madonna illuminata e un crocifisso in due punti diversi.
+   */
+  buildSacredSites() {
+    const rng = seededRandom((this.seed ^ 0x5acced) >>> 0);
+    this.fountains = [];
+    this.shrines = [];
+    this.extraTrees = [];
+    this.night = 0;
+    for (const c of this.churchSpots || []) this.decorateChurch(c);
+    // Alberi lungo il viale che porta alla Piazza del Monumento
+    const P = this.mapData.plaza || PLAZA;
+    if (P) {
+      const z0 = -URBAN_HALF - 6, z1 = P.z + P.half + 6;
+      for (let z = z0; z > z1; z -= 14) for (const sx of [-1, 1]) this.extraTrees.push([P.x + sx * (ROAD / 2 + 3.5), z]);
+    }
+    // Fontana 1: in piazza (quadrante libero lontano dal monumento e dalle aiuole del bordo)
+    if (P) this.addFountain(P.x - 52, P.z + 46, 3.4);
+    // Fontana 2: nel parco alberato più vicino al centro (posizione lontana da alberi e panchine)
+    const parks = this.mapData.blocks.filter((b) => b.park).sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z));
+    const park = parks[0];
+    let parkSpot = null;
+    if (park) {
+      parkSpot = this.freeSpotIn(park.x, park.z, BLOCK / 2 - 7, 4.6);
+      if (parkSpot) this.addFountain(parkSpot.x, parkSpot.z, 3.0);
+    } else {
+      // Nessun parco in questa città: un giardino con fontana nella seconda metà della piazza
+      if (P) this.addFountain(P.x + 52, P.z + 46, 3.0);
+    }
+    // Candidati per Madonna e crocifisso: collina, parco (giardino/giochi), angolo della piazza, viale alberato
+    const cands = [];
+    const hill = this.findHillTop();
+    if (hill) cands.push({ ...hill, where: 'collina' });
+    for (const pk of parks.slice(0, 3)) {
+      const s = this.freeSpotIn(pk.x, pk.z, BLOCK / 2 - 6, 2.6, parkSpot);
+      if (s) cands.push({ ...s, y: SIDEWALK_H, where: 'parco' });
+    }
+    if (P) {
+      cands.push({ x: P.x + 52, z: P.z - 50, y: 0, where: 'piazza' });
+      cands.push({ x: P.x - 52, z: P.z - 50, y: 0, where: 'piazza' });
+      cands.push({ x: P.x + ROAD / 2 + 6, z: -URBAN_HALF - 30, y: this.getHeight(P.x + ROAD / 2 + 6, -URBAN_HALF - 30), where: 'viale' });
+    }
+    if (cands.length >= 2) {
+      const i = Math.floor(rng() * cands.length);
+      let j = Math.floor(rng() * (cands.length - 1));
+      if (j >= i) j++;
+      // Due luoghi di tipo diverso quando possibile
+      if (cands[j].where === cands[i].where) {
+        const other = cands.findIndex((c, k) => k !== i && c.where !== cands[i].where);
+        if (other >= 0) j = other;
+      }
+      this.addShrine('madonna', cands[i]);
+      this.addShrine('crucifix', cands[j]);
+    }
+    this.buildExtraTrees();
+  }
+
+  /** Punto libero (lontano da alberi, panchine e da un punto da evitare) dentro un quadrato attorno a (cx, cz). */
+  freeSpotIn(cx, cz, half, clearance, avoid = null) {
+    let best = null, bestScore = -1;
+    for (let gx = -half; gx <= half; gx += 2) {
+      for (let gz = -half; gz <= half; gz += 2) {
+        const x = cx + gx, z = cz + gz;
+        let dmin = Infinity;
+        for (const [tx, tz] of this.treeSpots) dmin = Math.min(dmin, Math.hypot(tx - x, tz - z));
+        for (const [bx, bz] of this.benchSpots) dmin = Math.min(dmin, Math.hypot(bx - x, bz - z) - 1);
+        if (avoid) dmin = Math.min(dmin, Math.hypot(avoid.x - x, avoid.z - z) - 5);
+        if (dmin > bestScore) { bestScore = dmin; best = { x, z }; }
+      }
+    }
+    return bestScore >= clearance ? best : null;
+  }
+
+  /** Cima di una collina in campagna, non troppo lontana dalla città (raggiungibile a piedi). */
+  findHillTop() {
+    let best = null;
+    const P = PLAZA;
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 24) {
+      for (let r = URBAN_HALF + 40; r < URBAN_HALF + 170; r += 10) {
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        // Niente piazza, lago né strada d'accesso alla piazza
+        if (Math.abs(x - P.x) < P.half + 14 && z < -URBAN_HALF + 10) continue;
+        if (Math.hypot(x - LAKE.x, z - LAKE.z) < LAKE.r + 18) continue;
+        if (Math.max(Math.abs(x), Math.abs(z)) > PLAY_EDGE - 20) continue;
+        const y = this.getHeight(x, z);
+        if (!best || y > best.y) best = { x, z, y };
+      }
+    }
+    return best && best.y > 3 ? best : null;
+  }
+
+  addFountain(x, z, radius) {
+    const f = makeFountain(radius);
+    const y = this.getHeight(x, z) > 0.5 ? this.getHeight(x, z) : (Math.abs(x) < URBAN_HALF && Math.abs(z) < URBAN_HALF ? SIDEWALK_H : 0);
+    f.group.position.set(x, y, z);
+    this.root.add(f.group);
+    // Collider: vasca (cilindro approssimato con due box incrociati) e colonna
+    const r = f.radius;
+    this.addStaticBox(x, y + 0.4, z, r, 0.4, r * 0.72);
+    this.addStaticBox(x, y + 0.4, z, r * 0.72, 0.4, r);
+    this.fountains.push({ x, z, r, f });
+    (this.mapData.landmarks || (this.mapData.landmarks = [])).push({ x, z, type: 'fountain', name: 'Fontana' });
+  }
+
+  addShrine(kind, spot) {
+    const s = makeShrine(kind);
+    const y = spot.y ?? this.getHeight(spot.x, spot.z);
+    s.group.position.set(spot.x, y, spot.z);
+    // Rivolta verso il centro della città
+    s.group.rotation.y = Math.atan2(-spot.x, -spot.z);
+    this.root.add(s.group);
+    this.addStaticBox(spot.x, y + 0.9, spot.z, 0.75, 0.9, 0.75);
+    const nx = Math.sin(s.group.rotation.y), nz = Math.cos(s.group.rotation.y);
+    this.shrines.push({ kind, x: spot.x, z: spot.z, y, px: spot.x + nx * 1.9, pz: spot.z + nz * 1.9, facing: s.group.rotation.y + Math.PI, where: spot.where, s });
+    (this.mapData.landmarks || (this.mapData.landmarks = [])).push({ x: spot.x, z: spot.z, type: kind === 'madonna' ? 'madonna' : 'crucifix', name: kind === 'madonna' ? 'Statua della Madonna' : 'Crocifisso' });
+  }
+
+  /** Portale con colonne e timpano, gradini, contrafforti, vetrate laterali, aiuole e alberi attorno alla chiesa. */
+  decorateChurch({ cx, bz, w, d, h, nz }) {
+    const stone = new THREE.MeshStandardMaterial({ color: 0xe4dac6, roughness: 0.8 });
+    const faceZ = bz + nz * (d / 2);
+    const base = SIDEWALK_H;
+    // Gradini davanti all'ingresso (bassi: si salgono a piedi senza fatica)
+    for (let k = 0; k < 2; k++) {
+      const step = new THREE.Mesh(new THREE.BoxGeometry(7 - k * 0.8, 0.06, 1.0 - k * 0.4), stone);
+      step.position.set(cx, base + 0.03 + k * 0.06, faceZ + nz * (0.5 - k * 0.2));
+      step.receiveShadow = true;
+      this.root.add(step);
+    }
+    // Colonne del portale e timpano triangolare
+    for (const sx of [-1, 1]) {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 5.2, 14), stone);
+      col.position.set(cx + sx * 2.3, base + 2.6, faceZ + nz * 0.45);
+      col.castShadow = true;
+      this.root.add(col);
+      this.addStaticBox(cx + sx * 2.3, base + 2.6, faceZ + nz * 0.45, 0.3, 2.6, 0.3);
+      const capital = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.25, 0.8), stone);
+      capital.position.set(cx + sx * 2.3, base + 5.3, faceZ + nz * 0.45);
+      this.root.add(capital);
+    }
+    const ped = new THREE.Shape();
+    ped.moveTo(-3.1, 0); ped.lineTo(0, 1.6); ped.lineTo(3.1, 0); ped.closePath();
+    const pedGeo = new THREE.ExtrudeGeometry(ped, { depth: 0.7, bevelEnabled: false });
+    pedGeo.translate(0, 0, -0.35);
+    const pediment = new THREE.Mesh(pedGeo, stone);
+    pediment.position.set(cx, base + 5.42, faceZ + nz * 0.45);
+    pediment.castShadow = true;
+    this.root.add(pediment);
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.3, 0.8), stone);
+    lintel.position.set(cx, base + 5.4, faceZ + nz * 0.45);
+    this.root.add(lintel);
+    // Croce sopra il timpano
+    const gold = new THREE.MeshStandardMaterial({ color: 0xd6a73a, metalness: 0.9, roughness: 0.25 });
+    const cv = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.0, 0.15), gold);
+    cv.position.set(cx, base + 7.5, faceZ + nz * 0.45);
+    const ch = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.15, 0.15), gold);
+    ch.position.set(cx, base + 7.7, faceZ + nz * 0.45);
+    this.root.add(cv, ch);
+    // Contrafforti e vetrate a sesto acuto sui fianchi
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x1c2440, emissive: 0x7a5ad0, emissiveIntensity: 0.35, roughness: 0.2 });
+    this.windowMaterials.push(glassMat);
+    const n = Math.max(2, Math.floor(d / 6));
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < n; i++) {
+        const z = bz - d / 2 + 3 + i * ((d - 6) / Math.max(1, n - 1));
+        const but = new THREE.Mesh(new THREE.BoxGeometry(0.8, h * 0.7, 1.0), stone);
+        but.position.set(cx + sx * (w / 2 + 0.4), base + h * 0.35, z);
+        but.castShadow = true;
+        this.root.add(but);
+        this.addStaticBox(cx + sx * (w / 2 + 0.4), base + h * 0.35, z, 0.4, h * 0.35, 0.5);
+        if (i < n - 1) {
+          const wz = z + ((d - 6) / Math.max(1, n - 1)) / 2;
+          const win = new THREE.Mesh(new THREE.PlaneGeometry(1.2, h * 0.42), glassMat);
+          win.position.set(cx + sx * (w / 2 + 0.02), base + h * 0.5, wz);
+          win.rotation.y = sx * Math.PI / 2;
+          const arch = new THREE.Mesh(new THREE.CircleGeometry(0.6, 16, 0, Math.PI), glassMat);
+          arch.position.set(cx + sx * (w / 2 + 0.02), base + h * 0.5 + h * 0.21, wz);
+          arch.rotation.y = sx * Math.PI / 2;
+          this.root.add(win, arch);
+        }
+      }
+    }
+    // Aiuole con fiori ai lati della facciata e alberi attorno all'edificio
+    const planterMat = new THREE.MeshStandardMaterial({ color: 0x9a9283, roughness: 1 });
+    const flowerMat = new THREE.MeshStandardMaterial({ color: 0xd65a7a, roughness: 0.9, flatShading: true });
+    for (const sx of [-1, 1]) {
+      const px = cx + sx * 4.6, pz = faceZ + nz * 1.3;
+      const planter = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.45, 0.9), planterMat);
+      planter.position.set(px, base + 0.225, pz);
+      const flowers = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), flowerMat);
+      flowers.scale.set(1.3, 0.5, 0.7);
+      flowers.position.set(px, base + 0.55, pz);
+      this.root.add(planter, flowers);
+      this.addStaticBox(px, base + 0.225, pz, 0.8, 0.225, 0.45);
+      this.extraTrees.push([cx + sx * (w / 2 + 3.4), bz - nz * d / 3]);
+      this.extraTrees.push([cx + sx * (w / 2 + 3.4), bz + nz * d / 3]);
+    }
+  }
+
+  /** Alberi aggiunti (chiese, viale della piazza): istanziati, con collider sottile sul tronco. */
+  buildExtraTrees() {
+    const spots = this.extraTrees.filter(([x, z]) => !this.doors.some((dd) => Math.hypot(dd.x - x, dd.z - z) < 4));
+    if (!spots.length) return;
+    const trunkGeo = new THREE.CylinderGeometry(0.18, 0.26, 3.2, 7);
+    trunkGeo.translate(0, 1.6, 0);
+    const crownGeo = new THREE.IcosahedronGeometry(2.0, 1);
+    crownGeo.translate(0, 4.4, 0);
+    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x5a3f2c, roughness: 1 }), spots.length);
+    const crowns = new THREE.InstancedMesh(crownGeo, new THREE.MeshStandardMaterial({ color: 0x4d7a3a, roughness: 1, flatShading: true }), spots.length);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), col = new THREE.Color();
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    spots.forEach(([x, z], i) => {
+      const inCity = Math.abs(x) < URBAN_HALF && Math.abs(z) < URBAN_HALF;
+      const y = inCity ? SIDEWALK_H : this.getHeight(x, z);
+      const sc = 0.85 + ((i * 37) % 10) / 25;
+      p.set(x, y, z);
+      q.setFromAxisAngle(yAxis, i * 1.3);
+      m4.compose(p, q, new THREE.Vector3(sc, sc, sc));
+      trunks.setMatrixAt(i, m4);
+      crowns.setMatrixAt(i, m4);
+      crowns.setColorAt(i, col.setHSL(0.26 + ((i * 13) % 7) / 100, 0.45, 0.3 + ((i * 7) % 9) / 100));
+      this.addStaticBox(x, y + 1.5, z, 0.3, 1.5, 0.3);
+    });
+    trunks.castShadow = crowns.castShadow = true;
+    crowns.receiveShadow = true;
+    this.root.add(trunks, crowns);
+  }
+
+  /**
+   * Salone di bellezza: porta e insegna sulla facciata di un palazzo del centro che dà sul marciapiede
+   * (scelto in modo deterministico, il più vicino a casa, senza usare il generatore della città).
+   */
+  buildBarber() {
+    this.buildShopFront('barber', 30);
+  }
+
+  /**
+   * Negozio su una facciata esistente del centro (deterministico, senza generatore): il palazzo più vicino
+   * a casa oltre minDist metri, lontano dalle altre porte e dai bancomat. La porta va in coda all'elenco.
+   */
+  buildShopFront(type, minDist) {
+    const home = this.mapData.home || { x: 0, z: 0 };
+    let best = null, bestD = Infinity;
+    for (const b of this.mapData.buildings) {
+      if (b.district !== 'middle' && b.district !== 'rich' && b.district !== 'worker') continue;
+      if (b.w < 9 || b.d < 8) continue;
+      const row = Math.floor((b.z + HALF) / CELL);
+      const col = Math.floor((b.x + HALF) / CELL);
+      if (row < 0 || row >= GRID || col < 0 || col >= GRID) continue;
+      const edge = -HALF + row * CELL + CELL / 2 + BLOCK / 2;
+      const face = b.z + b.d / 2;
+      if (edge - face < 1 || edge - face > 7.5) continue; // facciata sul marciapiede sud
+      if (this.doors.some((d) => Math.hypot(d.x - b.x, d.z - face) < 14)) continue;
+      if (this.atms.some((a) => Math.hypot(a.mx - b.x, a.mz - face) < 4)) continue;
+      const dd = Math.hypot(b.x - home.x, face - home.z);
+      if (dd > minDist && dd < bestD) { bestD = dd; best = { x: b.x, face }; }
+    }
+    if (!best) return;
+    this.addDoor(type, best.x, best.face, BUILDING_TYPES[type], 1.8, 1);
+  }
+
+  /** Spacciatori: angoli appartati dei marciapiedi in periferia e zona industriale (nessuna icona sulla mappa). */
+  pickDealerSpots() {
+    const spots = [];
+    for (const [r, c] of [[5, 0], [6, 2], [4, 6], [5, 2]]) {
+      if (this.features[`${r},${c}`]) continue;
+      const cx = -HALF + c * CELL + CELL / 2, cz = -HALF + r * CELL + CELL / 2;
+      spots.push({ x: cx + BLOCK / 2 - 2.4, z: cz - 7.5, facing: -Math.PI / 2 });
+    }
+    this.dealerSpots = spots.slice(0, 3);
   }
 
   /* ---------- Piazza del Monumento ---------- */
@@ -728,6 +1014,7 @@ export class CityWorld {
 
   /** Ciclo dei semafori: 14 s verde, 3 s giallo, poi tocca all'altro asse (rosso per l'asse fermo). */
   updateTraffic(t, night) {
+    this.night = night; // usato anche da edicole votive e fontane (update)
     if (!this.trafficMats) return;
     const cycle = 34;
     const k = t % cycle;
@@ -1208,6 +1495,9 @@ export class CityWorld {
     this.windowMaterials.push(rose.material);
     this.root.add(rose);
     this.mapData.buildings.push({ x: cx, z: bz, w, d, district: 'church' });
+    // Dettagli architettonici, alberi e aiuole vengono aggiunti dopo la costruzione della città
+    // (decorateChurch): qui niente generatore casuale, così la città resta identica.
+    (this.churchSpots || (this.churchSpots = [])).push({ cx, bz, w, d, h, nz });
   }
 
   /** Officina meccanica: capannone con serrande, piazzale e pneumatici impilati. */
@@ -1644,8 +1934,10 @@ export class CityWorld {
           if (sale) {
             forSale++;
             const kind = villas ? 'villetta' : 'casa';
-            // Prezzi di mercato: case € 165.000-330.000, villette € 390.000-890.000 (una sola estrazione, come prima)
-            const price = villas ? Math.round((390 + rng() * 500) / 5) * 5000 : Math.round((165 + rng() * 165) / 5) * 5000;
+            // Prezzi ribassati del 35%: case ~€ 105.000-215.000, villette ~€ 255.000-580.000
+            // (una sola estrazione dal generatore, come prima: la città e i salvataggi non cambiano)
+            const listPrice = villas ? (390 + rng() * 500) * 1000 : (165 + rng() * 165) * 1000;
+            const price = Math.round((listPrice * 0.65) / 5000) * 5000;
             const id = `h${gj}_${gi}_${nz}_${k}`;
             const name = villas ? 'Villetta in vendita' : 'Casa in vendita';
             const door = this.addDoor('house', lx, frontZ + nz * 0.02, { ...BUILDING_TYPES.house, name }, 1.4, nz);
@@ -1818,6 +2110,9 @@ export class CityWorld {
   }
 
   update(t) {
+    // Fontane (acqua animata) ed edicole votive (lumini, fascio di luce più forte di notte)
+    for (const f of this.fountains || []) f.f.update(t);
+    for (const s of this.shrines || []) s.s.update(t, this.night || 0);
     for (let i = 0; i < this.doorRings.length; i++) {
       const r = this.doorRings[i];
       r.material.opacity = 0.32 + Math.sin(t * 2.6 + i) * 0.16;

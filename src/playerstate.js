@@ -19,9 +19,10 @@ export class PlayerState {
     this.maxStamina = 100;
     this.health = clamp(s.health ?? this.maxHealth, 1, this.maxHealth);
     this.stamina = clamp(s.stamina ?? this.maxStamina, 0, this.maxStamina);
-    this.aura = clamp(s.aura ?? 50, 1, 100);
+    this.aura = clamp(s.aura ?? 50, 0, 100);
     this.auraLog = Array.isArray(s.auraLog) ? s.auraLog.slice(0, 12) : [];
-    this.cash = Math.max(0, Math.round(s.cash ?? fallbackCash ?? character.money ?? 0));
+    // I contanti possono andare in negativo: è il debito (multe, penalità con Aura a zero)
+    this.cash = Math.round(s.cash ?? fallbackCash ?? character.money ?? 0);
     this.bank = { account: false, balance: 0, pin: null, ...(s.bank || {}) };
     this.inventory = Array.isArray(s.inventory) ? s.inventory.filter((i) => i && i.id && i.qty > 0) : [];
     this.wardrobe = Array.isArray(s.wardrobe) ? s.wardrobe.slice() : Object.values(DEFAULT_OUTFIT).filter(Boolean);
@@ -49,7 +50,14 @@ export class PlayerState {
     this.stats.shots = this.stats.shots || 0;
     // Felicità 0-100: sale con cibo buono e attività piacevoli, scende con eventi negativi o tristi
     this.happiness = clamp(s.happiness ?? 60, 0, 100);
+    // Ospedale: conto da pagare all'accettazione prima di uscire; sostanze illegali (secondi di effetto)
+    this.hospitalBill = Math.max(0, s.hospitalBill ?? 0);
+    this.high = Math.max(0, s.high ?? 0);
+    this.stats.drugs = this.stats.drugs || 0;
+    this.stats.debtPenalties = this.stats.debtPenalties || 0;
     this.happyLog = Array.isArray(s.happyLog) ? s.happyLog.slice(0, 8) : [];
+    // Casco scelto per moto/scooter/bici (indossato solo in sella)
+    this.helmet = s.helmet && this.count(s.helmet) > 0 ? s.helmet : null;
     // Il telefono è un oggetto dell'inventario: si apre solo cliccandolo nel menu TAB
     if (!this.has('telefono')) this.inventory.unshift({ id: 'telefono', qty: 1 });
   }
@@ -89,6 +97,7 @@ export class PlayerState {
       auraLevel: this.auraLevel, rewardsClaimed: this.rewardsClaimed, lastChurchDay: this.lastChurchDay,
       lastChurchPenaltyDay: this.lastChurchPenaltyDay, drunk: Math.round(this.drunk), houses: this.houses,
       jobs: this.jobs, happiness: Math.round(this.happiness * 10) / 10, happyLog: this.happyLog,
+      hospitalBill: this.hospitalBill, high: Math.round(this.high), helmet: this.helmet,
     };
   }
 
@@ -169,15 +178,18 @@ export class PlayerState {
    * Varia l'Aura. Raggiunto il 100% si sale di 1 Livello Aura (max 100) e la barra riparte dal 20%,
    * conservando l'eccedenza. I livelli raggiunti vengono accodati in this.levelUps.
    */
-  changeAura(delta, reason) {
+  changeAura(delta, reason, exact = false) {
     const before = this.aura;
+    // Aura più impegnativa: i guadagni sono graduali (−30%), tranne i valori fissi (candele, elemosina)
+    if (delta > 0 && !exact) delta = Math.round(delta * 0.7 * 100) / 100;
     let next = this.aura + delta;
     while (next >= 100 && this.auraLevel < 100) {
       this.auraLevel++;
       this.levelUps.push(this.auraLevel);
       next = 20 + (next - 100);
     }
-    this.aura = clamp(next, 1, 100);
+    // Può scendere fino a 0: con Aura a zero scatta la penalità giornaliera di € 1.000
+    this.aura = clamp(next, 0, 100);
     if (delta > 0) this.stats.goodDeeds++;
     else if (delta < 0) this.stats.badDeeds++;
     // Fare del bene rende sereni; i peccati lasciano un po' di amarezza

@@ -57,14 +57,28 @@ export class TrafficManager {
     v.traffic = true;
     const car = { v, pts: [], cum: [], s: 0, len: 0, node: null, dir: null, speed: 0, heading: 0, cruise: 0, waitT: 0, stopDone: false, blockedT: 0, honkT: 0, flashT: 0, prevSpeed: 0, rider: null };
     car.cruise = isTwo ? 9 + this.rng() * 3 : 10.5 + this.rng() * 2.5;
+    // Conducente sempre a bordo: la mesh è FIGLIA del veicolo, quindi segue posizione, piega e visibilità
+    // del mezzo in ogni fotogramma (niente sparizioni a distanza né scatti di sincronizzazione).
+    const look = isTwo ? { ...randomLook(this.rng), cap: 0x15161a } : randomLook(this.rng);
+    const mesh = makePerson(look);
+    mesh.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    const s = v.spec;
     if (isTwo) {
-      // Pilota con casco (berretto scuro) seduto in sella
-      const look = { ...randomLook(this.rng), cap: 0x15161a };
-      const mesh = makePerson(look);
-      mesh.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-      g.scene.add(mesh);
-      car.rider = { mesh, anim: new HumanAnimator(mesh) };
+      mesh.position.set(0, s.seatY - mesh.userData.hipHeight, s.seatZ);
+    } else {
+      // Posto di guida (sinistra = +X), sedile alla stessa quota dell'abitacolo in prima persona
+      const k = s.h / 1.45;
+      const gFront = s.len / 2 - (v.kind === 'sport' ? 1.55 : 1.25);
+      mesh.position.set(s.wid / 2 - 0.5, 0.57 * k - mesh.userData.hipHeight + 0.05, gFront - 0.32 - 1.2);
+      // Vetri un po' più chiari: il guidatore si vede da fuori
+      v.mesh.traverse((o) => {
+        if (o.isMesh && o.material && o.material.userData && o.material.userData.glass) o.material.opacity = 0.55;
+      });
     }
+    v.mesh.add(mesh);
+    const anim = new HumanAnimator(mesh);
+    car.rider = { mesh, anim, two: isTwo, animT: 0 };
+    anim.update(1 / 60, isTwo ? { speed: 0, state: 'ride', lean: 0 } : { speed: 0, state: 'sit' });
     return car;
   }
 
@@ -142,9 +156,20 @@ export class TrafficManager {
     return { x: a[0] + (b[0] - a[0]) * t, z: a[1] + (b[1] - a[1]) * t, h: Math.atan2(b[0] - a[0], b[1] - a[1]) };
   }
 
-  /** Riposiziona un mezzo su una strada a distanza [minD, maxD] dal punto p (fuori vista se possibile). */
+  /** Il punto è inquadrato dalla telecamera (davanti e non troppo lontano)? */
+  inView(x, z) {
+    const cam = this.game.camera;
+    if (!cam) return false;
+    cam.getWorldDirection(this._v);
+    const dx = x - cam.position.x, dz = z - cam.position.z;
+    const d = Math.hypot(dx, dz) || 1;
+    const fl = Math.hypot(this._v.x, this._v.z) || 1;
+    return d < 200 && (dx * this._v.x + dz * this._v.z) / (d * fl) > 0.3;
+  }
+
+  /** Riposiziona un mezzo su una strada a distanza [minD, maxD] dal punto p, fuori dall'inquadratura. */
   respawn(car, p, minD, maxD) {
-    for (let tries = 0; tries < 40; tries++) {
+    for (let tries = 0; tries < 60; tries++) {
       const i = MIN + Math.floor(this.rng() * (MAX - MIN + 1));
       const j = MIN + Math.floor(this.rng() * (MAX - MIN + 1));
       const din = DIRS[Math.floor(this.rng() * 4)];
@@ -152,6 +177,8 @@ export class TrafficManager {
       const [cx, cz] = this.center(i, j);
       const d = Math.hypot(cx - p.x, cz - p.z);
       if (d < minD || d > maxD) continue;
+      // Mai "comparire" davanti agli occhi del giocatore (tranne come ultima risorsa)
+      if (tries < 45 && this.inView(cx, cz)) continue;
       this.plan(car, i, j, din);
       car.s = car.cum[Math.min(car.cum.length - 2, 9)] + this.rng() * Math.max(1, car.len - car.cum[Math.min(car.cum.length - 2, 9)] - 8);
       const q = this.sample(car, car.s);
@@ -319,19 +346,18 @@ export class TrafficManager {
     const pp = this.game.mapPosition();
     for (const car of this.cars) {
       car.v.sync(dt);
-      if (car.rider) {
-        const v = car.v;
-        const r = car.rider;
-        const near = Math.hypot(v.body.position.x - pp.x, v.body.position.z - pp.z) < 90;
-        r.mesh.visible = near && v.mesh.visible;
-        if (!r.mesh.visible) continue;
-        v.mesh.updateMatrixWorld(true);
-        this._v.set(0, v.spec.seatY - r.mesh.userData.hipHeight, v.spec.seatZ);
-        v.mesh.localToWorld(this._v);
-        r.mesh.position.copy(this._v);
-        r.mesh.quaternion.copy(v.mesh.quaternion);
-        r.anim.update(dt, { speed: 0, state: 'ride', lean: v.lean });
-      }
+      const r = car.rider;
+      if (!r) continue;
+      // Il conducente è sempre visibile (figlio della mesh del mezzo); l'animazione si aggiorna
+      // ogni fotogramma da vicino e più di rado da lontano (la posa resta comunque quella di guida).
+      const d = Math.hypot(car.v.body.position.x - pp.x, car.v.body.position.z - pp.z);
+      r.animT += dt;
+      const every = d < 60 ? 0 : d < 140 ? 0.1 : 0.4;
+      if (r.animT < every) continue;
+      const step = r.animT;
+      r.animT = 0;
+      if (r.two) r.anim.update(step, { speed: 0, state: 'ride', lean: car.v.lean });
+      else r.anim.update(step, { speed: 0, state: 'sit', look: THREE.MathUtils.clamp(-car.v.steer * 0.5, -0.4, 0.4) });
     }
   }
 
@@ -375,7 +401,6 @@ export class TrafficManager {
     this.visible = v;
     for (const c of this.cars) {
       c.v.mesh.visible = v;
-      if (c.rider) c.rider.mesh.visible = v;
       // Al chiuso il traffico si ferma e non occupa la fisica della città
       if (!v) c.v.body.velocity.set(0, 0, 0);
     }
@@ -386,8 +411,8 @@ export class TrafficManager {
     for (const uid of this.engines) audio.engineStop(uid, true);
     this.engines.clear();
     for (const c of this.cars) {
+      if (c.rider) { c.v.mesh.remove(c.rider.mesh); disposeObject3D(c.rider.mesh); }
       c.v.dispose();
-      if (c.rider) { this.game.scene.remove(c.rider.mesh); disposeObject3D(c.rider.mesh); }
     }
     this.cars = [];
   }

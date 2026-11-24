@@ -33,6 +33,10 @@ export const ITEMS = {
   tenda: { name: 'Tenda da campeggio', cat: 'varie', price: 190, icon: '⛺', desc: 'Due posti, montaggio rapido.' },
   coperta: { name: 'Coperta', cat: 'varie', price: 30, icon: '🧣', desc: 'Lana pesante.' },
   candela: { name: 'Candela votiva', cat: 'varie', price: 2, icon: '🕯️', desc: 'Da accendere in chiesa.' },
+  // Sostanze illegali (spacciatori nei vicoli): effetto allucinogeno, vietato guidare
+  erba: { name: 'Erba', cat: 'illegali', price: 30, icon: '🌿', desc: 'Illegale. Effetto distorto per un po\'. Non metterti alla guida.', high: 70 },
+  pillole: { name: 'Pillole sconosciute', cat: 'illegali', price: 45, icon: '💊', desc: 'Illegali, di provenienza ignota. Allucinazioni forti.', high: 100 },
+  polvere: { name: 'Polvere bianca', cat: 'illegali', price: 90, icon: '🧂', desc: 'Illegale e pericolosissima. Visione completamente distorta.', high: 140 },
   // Documenti
   carta_credito: { name: 'Carta di credito', cat: 'documenti', price: 0, icon: '💳', desc: 'Usala agli ATM con il tuo PIN.' },
 };
@@ -82,17 +86,23 @@ export const DEFAULT_OUTFIT = {
 export const VEHICLE_MODELS = {
   bici: { name: 'Bicicletta urbana', kind: 'bike', price: 450, colors: [0x2b6cb0, 0x1d1d1f, 0xc53030] },
   mtb: { name: 'Mountain bike', kind: 'bike', price: 1100, colors: [0x2f855a, 0xdd6b20] },
-  motorino: { name: 'Motorino 50cc', kind: 'scooter', price: 2700, colors: [0xe9e9e6, 0x9b2c2c, 0x2c5282] },
-  scooter125: { name: 'Scooter 125cc', kind: 'scooter', price: 4500, colors: [0x1a1a1c, 0xb7b7b2] },
-  // Vespa: carrozzeria dedicata; la Special 50 ha il cambio a 4 marce (manuale con E/Q se attivo nelle Impostazioni)
-  vespa_primavera: { name: 'Vespa Primavera 50', kind: 'scooter', style: 'vespa', price: 4300, colors: [0x9ed9c9, 0xf2efe6, 0x7fb7d9, 0xb3122a], spec: { maxSpeed: 12.5, accel: 3.9 } },
-  vespa_special: { name: 'Vespa Special 50 a marce', kind: 'scooter', style: 'vespa', gears: 4, price: 5900, colors: [0xf0c84a, 0x2f855a, 0xb3122a, 0xf2efe6], spec: { maxSpeed: 13.5, accel: 4.3 } },
-  moto_naked: { name: 'Moto naked 650', kind: 'moto', price: 9400, colors: [0xc53030, 0x1a1a1c, 0xd69e2e] },
-  moto_sport: { name: 'Moto sportiva 1000', kind: 'moto', price: 21500, colors: [0x2b6cb0, 0xe9e9e6] },
-  utilitaria: { name: 'Utilitaria 3 porte', kind: 'car_small', price: 16900, colors: [0xe9e9e6, 0x9b2c2c, 0x2c7a7b, 0x4a5568] },
-  berlina: { name: 'Berlina familiare', kind: 'car', price: 33500, colors: [0x1a202c, 0x718096, 0x2a4365, 0xe2e8f0] },
-  suv: { name: 'SUV 4x4', kind: 'suv', price: 56000, colors: [0x1a1a1c, 0xe9e9e6, 0x4a5240] },
-  sportiva: { name: 'Coupé sportiva', kind: 'sport', price: 135000, colors: [0xc53030, 0xd69e2e, 0x1a1a1c] },
+  // Prestazioni coerenti con la cilindrata (cc): 50 cc ≈ 45 km/h, 125 cc ≈ 90 km/h
+  motorino: { name: 'Motorino 50cc', cc: 50, kind: 'scooter', price: 2700, colors: [0xe9e9e6, 0x9b2c2c, 0x2c5282], spec: { maxSpeed: 12.5, accel: 3.8 } },
+  scooter125: { name: 'Scooter 125cc', cc: 125, kind: 'scooter', price: 4500, colors: [0x1a1a1c, 0xb7b7b2], spec: { maxSpeed: 25, accel: 5.2 } },
+  // Vespa: carrozzeria dedicata; le "Special" hanno il cambio a 4 marce (manuale con E/Q se attivo nelle Impostazioni)
+  vespa_primavera: { name: 'Vespa Primavera 50', cc: 50, kind: 'scooter', style: 'vespa', price: 4300, colors: [0x9ed9c9, 0xf2efe6, 0x7fb7d9, 0xb3122a], spec: { maxSpeed: 12.5, accel: 3.9 } },
+  vespa_special: { name: 'Vespa Special 50 a marce', cc: 50, kind: 'scooter', style: 'vespa', gears: 4, price: 5900, colors: [0xf0c84a, 0x2f855a, 0xb3122a, 0xf2efe6], spec: { maxSpeed: 13.5, accel: 4.3 } },
+  // 125 cc: circa 90-95 km/h, ripresa da scooter di media cilindrata
+  vespa_primavera125: { name: 'Vespa Primavera 125cc', cc: 125, kind: 'scooter', style: 'vespa', price: 5600, colors: [0x7fb7d9, 0xf2efe6, 0xb3122a, 0x1d1d1f, 0x9ed9c9], spec: { maxSpeed: 25.5, accel: 5.4, mass: 125 } },
+  vespa_special125: { name: 'Vespa Special 125cc a marce', cc: 125, kind: 'scooter', style: 'vespa', gears: 4, price: 7200, colors: [0x2f855a, 0xf0c84a, 0xb3122a, 0xf2efe6], spec: { maxSpeed: 24.5, accel: 5.8, mass: 120 } },
+  moto_naked: { name: 'Moto naked 650', cc: 650, kind: 'moto', price: 9400, colors: [0xc53030, 0x1a1a1c, 0xd69e2e] },
+  moto_sport: { name: 'Moto sportiva 1000', cc: 1000, kind: 'moto', style: 'sport', price: 21500, colors: [0x2b6cb0, 0xe9e9e6], spec: { maxSpeed: 52, accel: 12.5 } },
+  // Hypersport da pista con compressore: velocità altissima, prezzo da collezione
+  ninja_h2r: { name: 'Kawasaki Ninja H2R', cc: 998, kind: 'moto', style: 'hyper', price: 62000, colors: [0x1b1d20, 0x3fbf3f], spec: { maxSpeed: 95, accel: 24, brake: 17, mass: 216, steer: 1.9 } },
+  utilitaria: { name: 'Utilitaria 3 porte', cc: 1200, kind: 'car_small', price: 16900, colors: [0xe9e9e6, 0x9b2c2c, 0x2c7a7b, 0x4a5568] },
+  berlina: { name: 'Berlina familiare', cc: 1600, kind: 'car', price: 33500, colors: [0x1a202c, 0x718096, 0x2a4365, 0xe2e8f0] },
+  suv: { name: 'SUV 4x4', cc: 2200, kind: 'suv', price: 56000, colors: [0x1a1a1c, 0xe9e9e6, 0x4a5240] },
+  sportiva: { name: 'Coupé sportiva', cc: 3800, kind: 'sport', price: 135000, colors: [0xc53030, 0xd69e2e, 0x1a1a1c] },
   // Non in vendita: volanti delle pattuglie
   polizia: { name: 'Volante della Polizia', kind: 'car', price: 0, colors: [0xf2f4f7], hidden: true },
 };
@@ -107,7 +117,29 @@ export const SERVICE_PRICES = {
   pizzaDelivery: 18, // margherita intera a domicilio
   candle: 2, // offerta per la candela votiva
   bustedFine: 450, // multa per ogni stella al momento dell'arresto
+  unpaidHospitalFine: 900, // multa se non puoi pagare le cure (va in debito)
+  zeroAuraPenalty: 1000, // addebito giornaliero con Aura a zero
 };
+
+/* ---------- Reati e infrazioni ---------- */
+export const PENALTIES = {
+  theftAura: 10, // qualsiasi furto: veicoli (auto, moto, bici), oggetti, cibo e bevande non pagati
+  redLightFine: 500, // passaggio con il semaforo rosso
+  redLightAura: 3,
+  statuePrayerAura: 1, // preghiera davanti alla Madonna o al crocifisso in città
+  sundayPrayerAura: 10, // Padre Nostro e Ave Maria in chiesa la domenica
+  processionAura: 10, // fine della processione del Venerdì Santo in cattedrale
+};
+
+/* ---------- Salone di bellezza / barbiere ---------- */
+export const BARBER = {
+  styles: [['short', 'Corto classico'], ['buzz', 'Rasato'], ['curly', 'Ricci'], ['long', 'Lunghi'], ['bun', 'Raccolti (chignon)'], ['bald', 'Calvo a zero']],
+  colors: [[0x1b1410, 'Nero'], [0x4a2f1d, 'Castano scuro'], [0x6b4a2b, 'Castano'], [0xa8763e, 'Ramato'], [0xd8b27a, 'Biondo'], [0x9a9a9a, 'Grigio'], [0x7a2a5a, 'Prugna'], [0x2a5aa0, 'Blu elettrico']],
+  prices: { cut: 25, color: 45, beard: 15, glasses: 0 },
+};
+
+/* ---------- Spacciatori nei vicoli ---------- */
+export const DEALER_STOCK = ['erba', 'pillole', 'polvere'];
 
 /* ---------- Menù di ristorante e pizzeria ---------- */
 export const MENUS = {
@@ -174,11 +206,12 @@ export const SHOP_STOCK = {
   pharmacy: ['cerotti', 'paracetamolo', 'ibuprofene', 'sciroppo', 'vitamine', 'kit_pronto_soccorso'],
   weapons: ['cacciavite', 'torcia', 'motosega', 'coltello', 'mazza', 'pistola', 'fondina'],
   bar: ['caffe', 'acqua', 'panino', 'barretta'],
+  helmets: ['casco_integrale', 'casco_adventure', 'casco_cross', 'casco_modulare', 'casco_jet'],
 };
 
 export const CATEGORY_LABELS = {
   cibo: 'Cibo e bevande', medicinali: 'Medicinali', attrezzi: 'Attrezzi', armi: 'Armi',
-  varie: 'Varie', documenti: 'Documenti', vestiti: 'Vestiti e accessori',
+  varie: 'Varie', documenti: 'Documenti', vestiti: 'Vestiti e accessori', illegali: 'Sostanze illegali',
 };
 
 /* ---------- Tuning nel garage di casa ---------- */
@@ -187,8 +220,28 @@ export const TUNING = {
   rims: [[null, 'Di serie'], [0xd0d4d8, 'Cromati'], [0x141414, 'Neri opachi'], [0xd6a73a, 'Oro'], [0x9a6b3a, 'Bronzo']],
   neons: [[null, 'Nessuno'], [0x2a7bff, 'Blu'], [0xff2a6d, 'Rosa'], [0x22ff88, 'Verde'], [0xffffff, 'Bianco']],
   // Prezzi base (auto da € 33.500); scalano con il valore del veicolo
-  cost: { paint: 900, rims: 750, lowered: 1100, tint: 380, neon: 650, engine1: 2600, engine2: 6400, brakes: 1400 },
+  cost: { paint: 900, rims: 750, lowered: 1100, tint: 380, neon: 650, engine1: 2600, engine2: 6400, engine3: 14500, brakes: 1400 },
 };
+
+/** Elaborazioni del motore (garage di casa): moltiplicatori di velocità massima e accelerazione. */
+export const ENGINE_STAGES = [
+  { speed: 1.08, accel: 1.14 }, // stage 1: centralina e filtro
+  { speed: 1.17, accel: 1.3 }, // stage 2: scarico e aspirazione
+  { speed: 1.3, accel: 1.5 }, // stage 3: turbo/compressore maggiorato, preparazione da pista
+];
+
+/* ---------- Negozio di caschi (per moto e motorini) ---------- */
+export const HELMETS = {
+  casco_integrale: { name: 'Casco integrale', type: 'integrale', price: 320, color: 0x1b1d22, accent: 0xc53030, desc: 'Protezione totale con visiera: il più sicuro in moto.' },
+  casco_adventure: { name: 'Casco adventure', type: 'adventure', price: 410, color: 0xe8e4da, accent: 0xdd6b20, desc: 'Frontino e visiera per strada e sterrato.' },
+  casco_cross: { name: 'Casco motocross', type: 'cross', price: 260, color: 0x2b6cb0, accent: 0xf2c200, desc: 'Leggero, mentoniera allungata e frontino: da usare con gli occhiali.' },
+  casco_modulare: { name: 'Casco modulare', type: 'modulare', price: 380, color: 0x4a5568, accent: 0x9aa0a6, desc: 'Mentoniera apribile: comodo in città.' },
+  casco_jet: { name: 'Casco jet', type: 'jet', price: 140, color: 0xf2efe6, accent: 0x2f855a, desc: 'Aperto e leggero: perfetto per scooter e Vespa.' },
+};
+// I caschi sono oggetti dell'inventario (non si consumano): "Usa in moto" li mette in testa quando guidi
+for (const [id, h] of Object.entries(HELMETS)) {
+  ITEMS[id] = { name: h.name, cat: 'attrezzi', price: h.price, icon: '⛑️', desc: `${h.desc} Dimezza i danni nelle cadute.`, helmet: h.type };
+}
 
 export function itemInfo(id) {
   if (ITEMS[id]) return { id, ...ITEMS[id] };

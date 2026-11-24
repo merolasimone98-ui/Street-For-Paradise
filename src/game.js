@@ -8,9 +8,9 @@ import { HUD } from './hud.js';
 import { Input } from './input.js';
 import { AutoSaver } from './save.js';
 import { getCity, getFamily, formatMoney, seededRandom } from './birthdata.js';
-import { Interior } from './interiors.js';
+import { Interior, INTERIOR_ORIGIN } from './interiors.js';
 import { PlayerState, GROUPS } from './playerstate.js';
-import { ITEMS, itemInfo, SERVICE_PRICES } from './items.js';
+import { ITEMS, itemInfo, SERVICE_PRICES, PENALTIES } from './items.js';
 import { VehicleManager, KIND_LABEL } from './vehicle.js';
 import { NpcManager, pickHomelessSpots } from './npcs.js';
 import { RestaurantService } from './restaurant.js';
@@ -29,8 +29,13 @@ import { Workshop } from './workshop.js';
 import { VEHICLE_MODELS } from './items.js';
 import { HomeGarage } from './garage.js';
 import { TrafficManager } from './traffic.js';
+import { HospitalCare } from './hospital.js';
+import { LAKE_SPOT } from './world.js';
 import { RADIO_STATIONS } from './audio.js';
-import { PLAZA } from './world.js';
+import { PLAZA, SIDEWALK_H, HALF, CELL, GRID, ROAD } from './world.js';
+import { setNameCity } from './names.js';
+import { PrayerReader } from './prayers.js';
+import { Procession } from './procession.js';
 
 const LOOT_ITEMS = ['torcia', 'coperta', 'kit_pronto_soccorso', 'candela'];
 
@@ -39,7 +44,11 @@ const GAME_MINUTES_PER_SECOND = 1440 / 3600;
 const AUTOSAVE_SECONDS = 30;
 const INTERACT_RADIUS = 2.5;
 const SLEEP_WAKE_HOUR = 7;
-const PEDESTRIANS = 40;
+const PEDESTRIANS = 52;
+// Furti (−10 Aura) e passaggio con il rosso (€ 500, −3 Aura): valori in items.js (PENALTIES)
+const THEFT_AURA = PENALTIES.theftAura;
+// Finestre che lasciano il mouse libero ma NON fermano il personaggio (si cammina e si guida)
+const NON_BLOCKING_UI = new Set(['tab', 'phone']);
 const DRUNK_FAINT = 50; // oltre il 50% di ubriachezza si sviene
 const DRUNK_DECAY = 0.12; // punti di ubriachezza smaltiti al secondo
 const DRINK_SIPS = 3;
@@ -49,7 +58,7 @@ const CHURCH_TYPES = ['church', 'cathedral', 'chapel'];
 const SURFACE_BY_DOOR = {
   home: 'wood', hospital: 'tile', market: 'tile', bank: 'marble', bar: 'wood', garage: 'asphalt', weapons: 'wood',
   clothing: 'wood', pharmacy: 'tile', restaurant: 'wood', pizzeria: 'tile', church: 'marble', police: 'tile',
-  cathedral: 'marble', chapel: 'marble', house: 'wood', workshop: 'asphalt', homegarage: 'asphalt',
+  cathedral: 'marble', chapel: 'marble', house: 'wood', workshop: 'asphalt', homegarage: 'asphalt', barber: 'tile', helmets: 'tile',
 };
 
 export class Game {
@@ -62,6 +71,7 @@ export class Game {
     this.onExitToMenu = onExitToMenu;
     this.character = save ? save.character : character;
     this.city = getCity(this.character.cityId);
+    setNameCity(this.character.cityId); // nomi degli NPC coerenti con la nazione
     this.family = getFamily(this.character.familyId);
     this.disposed = false;
     this.locked = false;
@@ -127,8 +137,10 @@ export class Game {
     this.garage.normalizeBays();
     this.sadWarnDay = -1;
     this.npcs = new NpcManager(this.scene, this.physics, this.world, this.state, rng);
-    this.npcs.spawnPedestrians(PEDESTRIANS);
+    this.npcs.spawnPedestrians(40);
     this.npcs.spawnHomeless(pickHomelessSpots(this.world, rng, 5));
+    // Pedoni in più dopo i senzatetto: la sequenza casuale di quelli esistenti non cambia
+    this.npcs.spawnPedestrians(PEDESTRIANS - 40);
     // Traffico: auto, scooter, Vespe e moto guidati da NPC
     this.traffic = new TrafficManager(this, seededRandom((seed ^ 0x7a11c) >>> 0));
     // Guida: radio (−1 = spenta), abbaglianti, clacson, caduta dalla moto
@@ -136,6 +148,18 @@ export class Game {
     this.highBeam = false;
     this.beamCheckT = 0;
     this.knockdown = null;
+    // Ospedale (barella, ricovero, conto), spacciatori nei vicoli, effetto delle sostanze
+    this.hospital = new HospitalCare(this);
+    this.npcs.spawnDealers(this.world.dealerSpots || []);
+    // Preghiere recitate (testo + voce) e processione del Venerdì Santo; semafori: passaggio col rosso
+    this.prayers = new PrayerReader(this);
+    this.procession = new Procession(this);
+    this.lastJunction = null;
+    this.redLightCooldown = 0;
+    this.tripView = 0;
+    this.highDriveT = 0;
+    this.cliffFall = null;
+    this.pewSeat = null;
     // Case già acquistate nei salvataggi: cartello VENDESI rimosso e nome aggiornato
     for (const door of this.world.houses) if (this.state.houses.includes(door.house.id)) this.markHouseOwned(door);
 
@@ -178,6 +202,13 @@ export class Game {
     this.player.animate(0);
     audio.playMusic(null);
 
+    // Conto dell'ospedale rimasto in sospeso in un salvataggio (uscito senza pagare): diventa debito
+    if (this.state.hospitalBill > 0) {
+      const unpaid = this.state.hospitalBill;
+      this.state.hospitalBill = 0;
+      this.state.cash -= unpaid;
+      setTimeout(() => { if (!this.disposed) this.toast(`Conto dell'ospedale non pagato: ${formatMoney(unpaid)} addebitati (saldo ${formatMoney(this.state.cash)}).`, 4200); }, 2500);
+    }
     // Primo salvataggio: per una nuova vita sovrascrive quello vecchio.
     this.autosaver.saveNow();
 
@@ -186,6 +217,7 @@ export class Game {
       save
         ? `${this.city.city} · ${this.currentPlaceName()} · ${formatMoney(this.state.cash)}`
         : `${this.city.city}. Esci di casa con ${formatMoney(this.state.cash)} in tasca. Clicca per iniziare.`,
+      false,
     );
   }
 
@@ -233,14 +265,20 @@ export class Game {
         return;
       }
       // Con i menu aperti il mouse è libero: TAB/ESC chiudono il menu TAB, ESC chiude la mappa.
+      // TAB è gestito solo qui (non dal loop), così aprire e chiudere non si sovrappongono nello stesso tasto.
       if (this.tabMenu.isOpen && (e.code === 'Tab' || e.code === 'Escape')) {
         e.preventDefault();
-        this.closeTabMenu();
+        if (!e.repeat) this.closeTabMenu();
       } else if (this.escMenu.isOpen && e.code === 'Escape' && !this.dialogs.isOpen && !document.querySelector('#modal:not(.hidden)')) {
         e.preventDefault();
         this.resume();
       } else if (e.code === 'Tab') {
         e.preventDefault();
+        if (!e.repeat && this.blockingUis() === 0 && !this.transitioning && !this.drinking && !this.convo.isOpen) this.openTabMenu();
+      } else if (e.code === 'Escape' && this.tabMenu.phoneOpen && !this.locked && this.blockingUis() === 0) {
+        // ESC con il telefono in mano (mouse libero): si ripone il telefono
+        e.preventDefault();
+        this.tabMenu.closePhone();
       }
     };
 
@@ -265,10 +303,19 @@ export class Game {
     window.removeEventListener('keydown', this._onKey);
   }
 
-  showClickToPlay(title, sub) {
+  showClickToPlay(title, sub, soft = true) {
     this.el.ctpTitle.textContent = title;
     this.el.ctpSub.textContent = sub || '';
+    // "soft": semplice avviso in alto (la tastiera funziona già, il clic serve solo a ricatturare il mouse)
+    this.el.ctp.classList.toggle('soft', soft);
     this.el.ctp.classList.remove('hidden');
+  }
+
+  /** Finestre che bloccano i comandi (dialoghi, mappa, Paradiso…). Inventario e telefono NON bloccano il movimento. */
+  blockingUis() {
+    let n = 0;
+    for (const k of this.openUis) if (!NON_BLOCKING_UI.has(k)) n++;
+    return n;
   }
 
   requestLock() {
@@ -284,26 +331,26 @@ export class Game {
   /** Una finestra/menu ha bisogno del cursore: si rilascia il Pointer Lock (il mondo continua a vivere). */
   openUi(kind) {
     this.openUis.add(kind);
-    this.input.enabled = false;
-    this.input.reset();
     this.el.ctp.classList.add('hidden');
-    this.hud.hidePrompt();
-    audio.chainsaw(false);
+    if (!NON_BLOCKING_UI.has(kind)) {
+      this.input.enabled = false;
+      this.input.reset();
+      this.hud.hidePrompt();
+      audio.chainsaw(false);
+    }
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
   /**
-   * Chiude una finestra. Il Pointer Lock viene richiesto SUBITO (dentro il gesto dell'utente, es. il clic su "Acquista"),
-   * così il controllo torna immediatamente al giocatore senza blocchi.
+   * Chiude una finestra. La tastiera torna attiva SUBITO (anche senza Pointer Lock: nessun blocco dopo un acquisto);
+   * il Pointer Lock viene richiesto dentro il gesto dell'utente e, se il browser lo rifiuta, basta un clic per la visuale.
    */
   closeUi(kind) {
     this.openUis.delete(kind);
-    if (this.openUis.size === 0) {
-      this.input.enabled = true;
-      if (!this.locked && !this.disposed) {
-        this.showClickToPlay('Clicca per riprendere', '');
-        this.requestLock();
-      }
+    if (this.blockingUis() === 0) this.input.enabled = true;
+    if (this.openUis.size === 0 && !this.locked && !this.disposed) {
+      this.showClickToPlay('Clicca per riprendere', '');
+      this.requestLock();
     }
   }
 
@@ -383,7 +430,7 @@ export class Game {
     let facing = this.player.facing;
     if (this.interior && this.currentDoor) {
       const spot = this.world.doorExitSpot(this.currentDoor);
-      p = { x: spot.x, y: 0.2 + 0.45, z: spot.z };
+      p = { x: spot.x, y: SIDEWALK_H + 0.45, z: spot.z };
       facing = spot.facing;
     } else if (this.driving) {
       const ex = this.safeExitPoint(this.driving);
@@ -415,7 +462,10 @@ export class Game {
       return;
     }
     const running = !this.paused;
-    const control = this.locked && this.openUis.size === 0;
+    // Tastiera attiva se nessuna finestra "bloccante" è aperta (inventario e telefono lasciano camminare e guidare);
+    // la visuale col mouse richiede invece il Pointer Lock.
+    const control = this.blockingUis() === 0;
+    const look = control && this.locked;
 
     if (running) {
       this.playTime += dt;
@@ -434,6 +484,10 @@ export class Game {
         });
       }
       this.updateKnockdown(dt);
+      this.updateHigh(dt);
+      this.procession.update(dt);
+      this.checkRedLight(dt);
+      this.hospital.update(dt);
       this.physics.step(1 / 60, dt, 5);
       if (!this.driving && this.player.bodyInWorld && this.player.body.position.y < -20) {
         const sp = this.world.getSpawn();
@@ -447,14 +501,16 @@ export class Game {
     }
     if (control && running) {
       if (this.input.consumePressed('KeyC')) this.hud.toggleCard();
+      this.input.consumePressed('Tab'); // TAB è gestito dal listener della tastiera
       if (this.convo.isOpen) {
         this.hud.hidePrompt();
         this.convo.update(dt, this.input);
+      } else if (this.tabMenu.isOpen) {
+        this.hud.hidePrompt(); // con l'inventario aperto si cammina, ma E/F non interagiscono
       } else {
-        if (this.input.consumePressed('Tab') && !this.drinking) this.openTabMenu();
         this.updateInteraction();
       }
-      this.updateEquipment(dt);
+      if (look) this.updateEquipment(dt);
     } else {
       if (this.convo.isOpen && !this.paused) this.convo.close();
       this.hud.hidePrompt();
@@ -464,8 +520,8 @@ export class Game {
     if (!this.locked && this.openUis.size === 0 && !this.transitioning && this.el.ctp.classList.contains('hidden')) {
       this.showClickToPlay('Clicca per riprendere', '');
     }
-    const mouse = control ? this.input.consumeMouse() : { dx: 0, dy: 0, wheel: 0 };
-    if (!control) this.input.consumeMouse();
+    const mouse = look ? this.input.consumeMouse() : { dx: 0, dy: 0, wheel: 0 };
+    if (!look) this.input.consumeMouse();
     this.input.endFrame();
 
     this.elapsed += dt;
@@ -558,7 +614,13 @@ export class Game {
   /* =====================================================================
      Caduta dalla moto/motorino (impennata o stoppie esagerati)
      ===================================================================== */
+  /** Con il casco in testa i danni da caduta in sella si dimezzano. */
+  helmetFactor() {
+    return this.player.helmetId ? 0.5 : 1;
+  }
+
   bikeCrash(v) {
+    const helm = this.helmetFactor(); // prima di scendere (scendendo il casco si toglie)
     const kind = v.crash;
     v.crash = null;
     const speed = Math.abs(v.speed);
@@ -576,7 +638,7 @@ export class Game {
     let x = p.x + Math.sin(h) * dist * dir, z = p.z + Math.cos(h) * dist * dir;
     const ex = this.safeExitPoint(v);
     if (!Number.isFinite(x) || Math.hypot(x - ex.x, z - ex.z) > 8) { x = ex.x; z = ex.z; }
-    const dmg = Math.round(10 + speed * 1.1);
+    const dmg = Math.round((10 + speed * 1.1) * helm);
     this.state.damage(dmg);
     this.state.changeHappiness(-6, kind === 'stoppie' ? 'Caduta in stoppie' : 'Ti sei schienato in impennata');
     audio.crash(1.2);
@@ -706,7 +768,7 @@ export class Game {
   surfaceUnderfoot() {
     if (this.interior && this.currentDoor) return SURFACE_BY_DOOR[this.currentDoor.type] || 'tile';
     const f = this.player.feet;
-    return f.y > 0.12 ? 'sidewalk' : 'asphalt';
+    return f.y > SIDEWALK_H * 0.5 ? 'sidewalk' : 'asphalt';
   }
 
   updateDriving(dt, control) {
@@ -735,7 +797,7 @@ export class Game {
     this.updateVehicleExtras(dt, control);
     audio.engineUpdate(v.uid, v.broken ? 0 : v.speed, v.spec.maxSpeed, ctl.throttle && !v.broken, v.gears && !v.broken ? v.rpm : null);
     if (v.impact > 0) {
-      const dmg = (v.impact - 6) * (v.spec.ride ? 5 : 2.5);
+      const dmg = (v.impact - 6) * (v.spec.ride ? 5 * this.helmetFactor() : 2.5);
       audio.crash(v.impact / 10);
       if (dmg > 1) {
         this.state.damage(dmg);
@@ -896,6 +958,14 @@ export class Game {
     const day = this.hour > 6 && this.hour < 19.5;
     audio.birds(dt, outdoors && day && !this.driving);
     audio.setCity(outdoors ? 0.8 : 0.15);
+    audio.cityEvents(dt, outdoors, this.hour);
+    // Scroscio delle fontane vicine
+    let water = 0;
+    if (outdoors) {
+      const mp = this.mapPosition();
+      for (const f of this.world.fountains || []) water = Math.max(water, 1 - Math.hypot(mp.x - f.x, mp.z - f.z) / 28);
+    }
+    audio.fountain(water);
     let crowd = 0;
     if (outdoors) {
       const f = this.player.feet;
@@ -918,6 +988,7 @@ export class Game {
       this.player.rideQuat = v.mesh.quaternion;
       this.player.rideLean = v.lean;
       this.player.pedalPhase = v.crank ? v.pedalPhase : null; // bici: le gambe pedalano
+      this.player.showHelmet(this.state.helmet && this.state.has(this.state.helmet) ? this.state.helmet : null);
       this.player.setPose('ride', seat, v.heading);
     } else {
       const p = v.position;
@@ -1080,6 +1151,13 @@ export class Game {
       this.toast(`Buon compleanno! Ora hai ${this.age} anni.`, 3500);
     }
     this.checkChurchAbsence();
+    // Aura a zero: penalità di € 1.000 al giorno finché non risali (i contanti possono andare in debito)
+    if (this.state.aura <= 0.05) {
+      const pen = SERVICE_PRICES.zeroAuraPenalty;
+      this.state.cash -= pen;
+      this.state.stats.debtPenalties++;
+      setTimeout(() => { if (!this.disposed) this.toast(`⚠ Aura a zero: penalità di ${formatMoney(pen)}. Saldo: ${formatMoney(this.state.cash)}. Fai opere di bene per risalire!`, 4600); }, 1500);
+    }
     // I bancomat rapinati vengono riparati il giorno dopo
     for (const a of this.world.atms) {
       if (a.robbedDay >= 0 && a.robbedDay < this.day) {
@@ -1090,6 +1168,8 @@ export class Game {
     }
     const info = dayInfo(this.today());
     if (info.feast) setTimeout(() => { if (!this.disposed) this.toast(`Oggi è ${info.feast}: vai a Messa per +5 Aura extra!`, 4200); }, 3800);
+    if (info.feast === 'Venerdì Santo') setTimeout(() => { if (!this.disposed) this.toast('Alle 18 la processione parte dalla Piazza del Monumento e arriva alla Cattedrale: partecipa e prega con i fedeli (+10 Aura).', 5200); }, 8200);
+    else if (info.sunday) setTimeout(() => { if (!this.disposed) this.toast('È domenica: in chiesa o in cattedrale recita il Padre Nostro e l\'Ave Maria (+10 Aura).', 4600); }, 8200);
   }
 
   /** Dopo 7 giorni senza andare in chiesa: −5 Aura, poi −2 per ogni giorno in più. */
@@ -1153,13 +1233,20 @@ export class Game {
       }
     } else if (this.player.pose === 'sit') {
       if (this.restaurant && this.restaurant.canStand) consider(0, 'alzarti', () => this.restaurant.stand());
+      // Seduto nel banco della chiesa: Messa con [E], alzarsi con [F]
+      if (this.pewSeat) {
+        if (this.state.daily.mass !== this.day) consider(0, 'partecipare alla Santa Messa', () => this.attendMass());
+        else consider(0, 'restare in raccoglimento', () => this.toast('Resti seduto in silenzio. Hai già partecipato alla Messa oggi.', 2400));
+        fLabel = 'alzarti dal banco';
+        fAction = () => this.leavePew();
+      }
     } else if (this.interior) {
       const ex = this.interior.exitPoint;
       const dEx = Math.hypot(feet.x - ex.x, feet.z - ex.z);
       if (dEx <= INTERACT_RADIUS) consider(dEx, 'uscire', () => this.exitBuilding());
       for (const it of this.interior.interactables) {
         const d = Math.hypot(feet.x - it.x, feet.z - it.z);
-        if (d <= it.radius) consider(d, it.label, () => this.runInteraction(it));
+        if (d <= it.radius) consider(d, it.action === 'pray' ? this.prayLabel(it.label) : it.label, () => this.runInteraction(it));
       }
       // Garage di casa: [F] guida il veicolo, [E] tuning del veicolo vicino
       if (this.garage.inside) {
@@ -1189,6 +1276,11 @@ export class Game {
         }
       }
       const saw = this.state.equipped === 'motosega';
+      // Edicole in città: Madonna illuminata e crocifisso (+1 Aura per ogni preghiera)
+      for (const s of this.world.shrines || []) {
+        const d = Math.hypot(feet.x - s.px, feet.z - s.pz);
+        if (d < 2.0) consider(d - 0.3, s.kind === 'madonna' ? 'pregare davanti alla Madonna (+1 Aura)' : 'pregare davanti al crocifisso (+1 Aura)', () => this.prayAtShrine(s));
+      }
       for (const a of this.world.atms) {
         const d = Math.hypot(feet.x - a.x, feet.z - a.z);
         if (d >= 1.4) continue;
@@ -1196,6 +1288,8 @@ export class Game {
         else if (saw) consider(d, 'tagliare il bancomat con la motosega (rapina)', () => this.robAtm(a));
         else consider(d, 'usare il bancomat', () => this.dialogs.atm());
       }
+      const dealer = this.npcs.nearestDealer(feet.x, feet.z, 2.2);
+      if (dealer) consider(Math.hypot(feet.x - dealer.pos.x, feet.z - dealer.pos.z) - 0.2, `parlare con ${dealer.name} (spacciatore)`, () => this.dialogs.dealerShop(dealer));
       const npc = this.npcs.nearest(feet.x, feet.z, 2.0);
       if (npc && npc.downT > 0) {
         consider(Math.hypot(feet.x - npc.pos.x, feet.z - npc.pos.z), `soccorrere ${npc.name}`, () => this.helpDowned(npc));
@@ -1257,41 +1351,14 @@ export class Game {
       case 'ws': if (this.workshop) this.workshop.interact(it); break;
       case 'calendar': this.dialogs.calendar(this.today()); break;
       case 'tuning': this.dialogs.tuningGarage(); break;
-      case 'mass': this.attendMass(); break;
       case 'confess': this.confess(); break;
-      case 'hospital': {
-        if (st.health >= st.maxHealth - 0.5) { this.toast('Il medico ti visita: sei in perfetta salute!'); break; }
-        const fee = SERVICE_PRICES.hospital;
-        if (st.payWith(fee, 'cash') || st.payWith(fee, 'card')) {
-          st.heal(st.maxHealth);
-          st.changeHappiness(3, 'Ti senti di nuovo in forma');
-          audio.cash();
-          this.toast(`Cure completate: salute al massimo (−${formatMoney(fee)}).`);
-        } else {
-          st.heal(st.maxHealth * 0.6);
-          this.toast('Non puoi pagare: la sanità pubblica ti cura comunque.');
-        }
-        break;
-      }
-      case 'pray':
-        if (st.daily.prayer !== this.day) {
-          st.daily.prayer = this.day;
-          st.stats.prayers++;
-          st.changeAura(2, 'Hai pregato in chiesa');
-          audio.confirm();
-          this.toast('Preghi in silenzio per mamma e papà. Senti una grande pace. (+2 Aura)', 3000);
-        } else {
-          this.toast('Resti qualche minuto in raccoglimento.');
-        }
-        break;
-      case 'candle':
-        if (!st.pay(2)) { this.toast('Ti servono € 2 per l\'offerta.'); break; }
-        if (st.daily.candle !== this.day) {
-          st.daily.candle = this.day;
-          st.changeAura(1, 'Hai acceso una candela e fatto un\'offerta');
-          this.toast('Accendi una candela per i tuoi genitori. (+1 Aura)');
-        } else this.toast('Accendi un\'altra candela.');
-        break;
+      case 'pew': this.sitInPew(it.data.pew); break;
+      case 'barber': this.dialogs.barber(it.data.seat); break;
+      case 'togarage': this.passInnerDoor('homegarage'); break;
+      case 'tohouse': this.passInnerDoor('home'); break;
+      case 'hospital': this.hospital.reception(); break;
+      case 'pray': this.pray(it.data); break;
+      case 'candle': this.lightVotiveCandle(); break;
       case 'paradise':
         if (st.auraLevel >= PARADISE_LEVEL) this.enterParadise();
         else if (st.auraLevel >= PARADISE_PREVIEW_LEVEL) this.paradisePreview();
@@ -1309,11 +1376,151 @@ export class Game {
     }
   }
 
-  /* ---------- Chiesa: Messa, confessione, anteprima del Paradiso ---------- */
+  /* ---------- Chiesa: banchi, Messa, preghiera, candele, confessione, Paradiso ---------- */
+  /** Si siede in un posto libero del banco (per la Messa bisogna essere seduti). */
+  sitInPew(pew) {
+    const free = pew.seats.filter((s) => !s.taken);
+    if (!free.length) { this.toast('Questo banco è pieno: prova quello accanto.', 2000); return; }
+    const f = this.player.feet;
+    free.sort((a, b) => Math.abs(a.x + INTERIOR_ORIGIN.x - f.x) - Math.abs(b.x + INTERIOR_ORIGIN.x - f.x));
+    const seat = free[0];
+    seat.taken = true;
+    this.pewSeat = { pew, seat };
+    this.sitAt({ seat: this.interior.toWorld(seat.x, 0.5, pew.z), facing: Math.PI });
+    this.markChurchVisit();
+  }
+
+  leavePew() {
+    if (!this.pewSeat) return;
+    if (this.action) { this.toast('Aspetta la fine della Messa.', 1600); return; }
+    this.pewSeat.seat.taken = false;
+    const { pew } = this.pewSeat;
+    this.pewSeat = null;
+    this.player.setPose('auto');
+    this.player.setPhysicsEnabled(true);
+    const p = this.interior.toWorld(pew.aisleX, 0, pew.z + 0.4);
+    this.player.setPosition(p.x, 0.02, p.z, Math.PI);
+  }
+
+  /** In ginocchio davanti all'altare, mani giunte. */
+  pray(data) {
+    const st = this.state;
+    this.markChurchVisit();
+    const p = this.interior.toWorld(data.x || 0, 0, data.z || 0);
+    this.player.setPosition(p.x, 0.02, p.z + 0.3, Math.PI);
+    // Fine della processione del Venerdì Santo (in cattedrale) o domenica: Padre Nostro e Ave Maria recitati
+    const inCathedral = this.currentDoor && this.currentDoor.type === 'cathedral';
+    if (inCathedral && this.procession.arrivedToday && st.daily.processionPrayer !== this.day) {
+      this.recitePrayers('processione', PENALTIES.processionAura, 'Hai pregato con i fedeli alla fine della processione del Venerdì Santo', 'processionPrayer');
+      return;
+    }
+    if (this.today().getDay() === 0 && st.daily.sundayPrayer !== this.day) {
+      this.recitePrayers('domenica', PENALTIES.sundayPrayerAura, 'Hai recitato il Padre Nostro e l\'Ave Maria la domenica', 'sundayPrayer');
+      return;
+    }
+    this.player.workState = 'pray';
+    audio.choir(5);
+    this.action = {
+      t: 0, dur: 5, text: 'Preghi in ginocchio, a mani giunte…',
+      onDone: () => {
+        this.player.workState = null;
+        if (st.daily.prayer !== this.day) {
+          st.daily.prayer = this.day;
+          st.stats.prayers++;
+          st.changeAura(2, 'Hai pregato in chiesa');
+          audio.confirm();
+          this.toast('Preghi in silenzio per mamma e papà. Senti una grande pace.', 3000);
+        } else {
+          st.changeHappiness(1, 'Raccoglimento in chiesa');
+          this.toast('Resti qualche minuto in raccoglimento.');
+        }
+      },
+    };
+  }
+
+  /**
+   * Padre Nostro (voce maschile) e Ave Maria (voce femminile) con il testo completo a schermo, in ginocchio.
+   * Solo arrivando all'Amen si ottiene l'Aura (una volta al giorno per ciascun tipo: dailyKey).
+   */
+  async recitePrayers(kind, aura, reason, dailyKey) {
+    const st = this.state;
+    this.player.workState = 'pray';
+    const heading = kind === 'processione' ? 'Venerdì Santo · con i fedeli in Cattedrale' : 'Preghiera della domenica';
+    const ok = await this.prayers.recite(['padreNostro', 'aveMaria'], { heading });
+    if (this.disposed) return;
+    this.player.workState = null;
+    if (!ok) {
+      this.toast('Preghiera interrotta: per ricevere l\'Aura arriva fino all\'Amen.', 2600);
+      return;
+    }
+    st.daily[dailyKey] = this.day;
+    st.daily.prayer = this.day;
+    st.stats.prayers++;
+    st.changeAura(aura, reason, true);
+    st.changeHappiness(4, 'Preghiera recitata');
+    audio.churchBells(2);
+    audio.confirm();
+    this.toast(`Amen. Senti una pace profonda. (+${aura} Aura)`, 3400);
+  }
+
+  /** Etichetta del [E] davanti all'altare: speciale alla fine della processione e la domenica. */
+  prayLabel(base) {
+    const st = this.state;
+    if (this.currentDoor && this.currentDoor.type === 'cathedral' && this.procession.arrivedToday && st.daily.processionPrayer !== this.day) {
+      return 'pregare con i fedeli della processione (Padre Nostro e Ave Maria, +10 Aura)';
+    }
+    if (this.today().getDay() === 0 && st.daily.sundayPrayer !== this.day) return 'recitare il Padre Nostro e l\'Ave Maria (domenica, +10 Aura)';
+    return base;
+  }
+
+  /** Preghiera davanti alla Madonna o al crocifisso in città: in ginocchio 5 secondi, +1 Aura ogni volta. */
+  prayAtShrine(s) {
+    if (this.action) return;
+    const st = this.state;
+    this.player.setPosition(s.px, s.y + 0.02, s.pz, s.facing);
+    this.player.workState = 'pray';
+    audio.choir(4);
+    this.action = {
+      t: 0, dur: 5, text: s.kind === 'madonna' ? 'Preghi davanti alla Madonna…' : 'Preghi davanti al crocifisso…',
+      onDone: () => {
+        this.player.workState = null;
+        st.stats.prayers++;
+        st.changeAura(PENALTIES.statuePrayerAura, s.kind === 'madonna' ? 'Hai pregato davanti alla Madonna' : 'Hai pregato davanti al crocifisso', true);
+        audio.candle();
+        this.toast(s.kind === 'madonna' ? 'Ave Maria, piena di grazia… (+1 Aura)' : 'Signore, abbi pietà di noi. (+1 Aura)', 2600);
+      },
+    };
+  }
+
+  /** Candela votiva dall'inventario: la posi e la accendi nella zona delle candele (+1 Aura, max 5 al giorno). */
+  lightVotiveCandle() {
+    const st = this.state;
+    this.markChurchVisit();
+    if (!st.has('candela')) {
+      this.toast('Non hai candele votive: comprale al minimarket (€ 2) o riscatta la ricompensa del Livello 1 Aura.', 3400);
+      return;
+    }
+    const today = st.daily.candleDay === this.day ? st.daily.candleCount || 0 : 0;
+    if (!this.interior.lightCandle || !this.interior.lightCandle()) { this.toast('Il ripiano delle candele è pieno.', 2000); return; }
+    st.removeItem('candela', 1);
+    st.daily.candleDay = this.day;
+    st.daily.candleCount = today + 1;
+    audio.candle();
+    if (today < 5) {
+      st.changeAura(1, 'Hai acceso una candela votiva', true);
+      this.toast('Accendi una candela votiva per i tuoi genitori. (+1 Aura)', 2600);
+    } else {
+      this.toast('Accendi un\'altra candela. (Oggi hai già ricevuto il massimo di Aura dalle candele)', 3000);
+    }
+  }
+
   attendMass() {
     const st = this.state;
     this.markChurchVisit();
     if (st.daily.mass === this.day) { this.toast('Hai già partecipato alla Messa oggi. Torna domani.', 2600); return; }
+    if (!this.pewSeat) { this.toast('Per partecipare alla Messa siediti in un banco.', 2400); return; }
+    audio.churchBells();
+    audio.choir(8);
     const info = dayInfo(this.today());
     this.action = {
       t: 0, dur: 8, text: info.red ? `Santa Messa · ${info.feast || 'Domenica'}` : 'Partecipi alla Santa Messa…',
@@ -1388,8 +1595,9 @@ export class Game {
     return this.npcs.nearest(f.x, f.z, 3);
   }
 
+  /** Ultimo ringraziamento ricevuto (proporzionato al dono appena fatto). */
   thanks() {
-    return this.npcs.thanksLine();
+    return this.lastThanks || this.npcs.thanksLine();
   }
 
   onDonate(npc, gift) {
@@ -1398,13 +1606,19 @@ export class Game {
     st.stats.donations++;
     let aura = 0;
     let reason = '';
+    let value = 0; // valore del dono in Euro (per l'entusiasmo del ringraziamento)
+    let exact = false;
     if (gift.kind === 'money') {
       st.stats.donatedMoney += gift.amount;
-      aura = Math.min(6, 0.5 + gift.amount * 0.08) * (homeless ? 1 : 0.4);
+      value = gift.amount;
+      // Elemosina ai senzatetto: 0,1 Aura per ogni Euro (es. € 2 = +0,2 Aura); ai passanti un po' meno
+      aura = Math.round(gift.amount * (homeless ? 0.1 : 0.04) * 100) / 100;
+      exact = true;
       reason = `Hai donato ${formatMoney(gift.amount)} a ${npc.name}`;
     } else if (gift.kind === 'item') {
       const big = ['sacco_a_pelo', 'tenda', 'coperta'].includes(gift.id);
       aura = big ? 3 : 1.5;
+      value = itemInfo(gift.id).price || 5;
       reason = `Hai donato ${itemInfo(gift.id).name} a ${npc.name}`;
       if (homeless && big) {
         st.homelessGifts[npc.id] = { ...(st.homelessGifts[npc.id] || {}), [gift.id]: true };
@@ -1412,6 +1626,7 @@ export class Game {
       }
     } else if (gift.kind === 'cloth') {
       aura = 1.5;
+      value = 40;
       reason = `Hai donato dei vestiti a ${npc.name}`;
     } else if (gift.kind === 'vehicle') {
       const v = this.vehicles.list.find((x) => x.uid === gift.uid);
@@ -1421,11 +1636,27 @@ export class Game {
         this.vehicles.remove(v);
       }
       aura = 8;
+      value = 5000;
       reason = `Hai regalato un veicolo a ${npc.name}`;
     }
-    st.changeAura(aura, reason + ' (opera di carità)');
-    audio.voice(npc.look && npc.look.sex === 'f', 7);
-    this.toast(`${reason}. (+${aura.toFixed(1)} Aura)`, 2600);
+    st.changeAura(aura, reason + ' (opera di carità)', exact);
+    const gained = exact ? aura : aura * 0.7;
+    // Ringraziamento proporzionato al valore del dono (voce più lunga ed entusiasta)
+    this.lastThanks = this.thanksFor(value, homeless);
+    audio.voice(npc.look && npc.look.sex === 'f', Math.min(16, 5 + Math.round(Math.log2(value + 1) * 1.5)));
+    if (value >= 100) audio.cheer();
+    this.toast(`${npc.name}: «${this.lastThanks}» (+${gained.toFixed(1)} Aura)`, 3200);
+  }
+
+  /** Frase di ringraziamento in base al valore del dono. */
+  thanksFor(value, homeless = true) {
+    const pick = (a) => a[Math.floor(Math.random() * a.length)];
+    if (!homeless) return pick(['Grazie, sei gentile!', 'Oh, grazie mille!']);
+    if (value < 5) return pick(['Grazie, ogni moneta aiuta.', 'Grazie, Dio ti benedica.', 'Grazie… almeno un caffè caldo.']);
+    if (value < 20) return pick(['Grazie di cuore! Oggi potrò mangiare.', 'Che gentile… grazie davvero!', 'Grazie! Non me lo aspettavo.']);
+    if (value < 100) return pick(['Non so come ringraziarti… sei un angelo!', 'Grazie infinite! Mi hai cambiato la settimana!', 'Che Dio ti benedica, fratello! Grazie, grazie!']);
+    if (value < 1000) return pick(['Non ci posso credere… è tantissimo! Che il cielo ti protegga!', 'Mi viene da piangere… grazie, mi hai ridato speranza!']);
+    return pick(['Un regalo così?! Mi hai cambiato la vita! Non ti dimenticherò mai!', 'È un miracolo! Grazie, grazie, grazie dal profondo del cuore!']);
   }
 
   /* ---------- Inventario ---------- */
@@ -1441,6 +1672,15 @@ export class Game {
       st.changeHappiness(Math.max(0.5, Math.min(4, (it.heal || 0) / 6)), `Hai mangiato: ${it.name}`);
       if (['acqua', 'caffe'].includes(id)) audio.drink(); else audio.eat();
       return `Hai consumato: ${it.name} (+${it.heal || 0} salute${it.stamina ? `, +${it.stamina} stamina` : ''}).`;
+    }
+    if (it.cat === 'illegali') {
+      st.removeItem(id, 1);
+      st.high = Math.min(220, st.high + (it.high || 60));
+      st.stats.drugs++;
+      st.changeAura(-3, `Hai assunto sostanze illegali (${it.name})`);
+      st.changeHappiness(3, 'Euforia artificiale');
+      audio.drugs();
+      return `${it.name}: tutto inizia a girare e a cambiare colore… Non metterti alla guida!`;
     }
     if (it.cat === 'medicinali') {
       if (st.health >= st.maxHealth - 0.5) return 'Sei già in piena salute.';
@@ -1492,9 +1732,9 @@ export class Game {
         this.player.updateHeld(this.state.equipped);
         v.owner = 'stolen';
         this.state.stats.stolenVehicles++;
-        this.state.changeAura(-8, 'Hai rubato un veicolo (7° comandamento: non rubare)');
+        this.state.changeAura(-THEFT_AURA, 'Hai rubato un veicolo (7° comandamento: non rubare)');
         audio.carAlarm(6);
-        this.toast('Serratura forzata: scatta l\'antifurto! (−8 Aura)', 2400);
+        this.toast(`Serratura forzata: scatta l'antifurto! (−${THEFT_AURA} Aura)`, 2400);
         this.police.report(3, 'Furto di veicolo');
         this.mountVehicle(v);
       },
@@ -1523,9 +1763,9 @@ export class Game {
           found = itemInfo(id).name;
         }
         st.stats.robberies++;
-        st.changeAura(-4, 'Hai rubato da un\'auto (7° comandamento: non rubare)');
+        st.changeAura(-THEFT_AURA, 'Hai rubato da un\'auto (7° comandamento: non rubare)');
         audio.carAlarm(5);
-        this.toast(`Hai trovato: ${found}. Scatta l'antifurto! (−4 Aura)`, 3000);
+        this.toast(`Hai trovato: ${found}. Scatta l'antifurto! (−${THEFT_AURA} Aura)`, 3000);
         this.police.report(2, 'Furto in auto');
       },
     };
@@ -1667,6 +1907,7 @@ export class Game {
     const ex = this.safeExitPoint(v);
     v.occupied = false;
     this.driving = null;
+    this.player.showHelmet(null); // il casco si toglie scendendo dalla sella
     audio.engineStop(v.uid);
     audio.door();
     audio.hornStop();
@@ -1734,6 +1975,10 @@ export class Game {
   }
 
   async taxiTo(door) {
+    if (this.hospital.inside && this.state.hospitalBill > 0) {
+      this.tabMenu.call('🚕', 'Radio Taxi', `Prima devi pagare le cure all'accettazione dell'ospedale (${formatMoney(this.state.hospitalBill)}).`);
+      return;
+    }
     const fare = this.taxiFare(door);
     if (!this.state.pay(fare)) { this.tabMenu.call('🚕', 'Radio Taxi', `Servono ${formatMoney(fare)} in contanti.`); return; }
     this.closeTabMenu();
@@ -1840,6 +2085,28 @@ export class Game {
     this.player.setPose('sit', p, seat.facing);
   }
 
+  /** Il barbiere lavora (forbici e rasoio), poi il personaggio si alza con il nuovo look. */
+  barberWork(pick, total) {
+    const c = this.character;
+    audio.scissors(4.5);
+    if (pick.style === 'buzz' || pick.style === 'bald' || pick.beard !== !!c.beard) audio.clipper(3);
+    this.action = {
+      t: 0, dur: 5, text: 'Il barbiere è al lavoro…',
+      onDone: () => {
+        c.hairStyle = pick.style;
+        c.hair = pick.color;
+        c.beard = !!pick.beard;
+        this.player.setOutfit(this.state.outfit);
+        this.player.updateHeld(this.state.equipped);
+        this.state.changeHappiness(5, 'Nuovo look dal barbiere');
+        this.standUp();
+        audio.confirm();
+        this.toast(`Nuovo look! (−${formatMoney(total)}) Guardati allo specchio.`, 3000);
+        this.autosaver.saveNow();
+      },
+    };
+  }
+
   standUp() {
     const pos = this.player.posePosition ? this.player.posePosition.clone() : this.player.feet;
     const f = this.player.facing;
@@ -1899,6 +2166,8 @@ export class Game {
       this.garage.deactivate();
     }
     if (this.restaurant) { this.restaurant.dispose(); this.restaurant = null; }
+    this.pewSeat = null;
+    if (this.hospital.seq == null) this.hospital.cleanup();
     if (this.workshop) {
       const onShift = this.workshop.onShift;
       this.workshop.dispose();
@@ -1967,30 +2236,94 @@ export class Game {
     await fadeTo(1, 1.2, '#000');
     if (this.disposed) return;
     if (drunk) { this.player.setPose('auto'); this.player.setPhysicsEnabled(true); }
-    this.leaveInteriorImmediate();
     const st = this.state;
-    const bill = Math.min(st.cash, SERVICE_PRICES.faintBill);
-    st.cash -= bill;
-    st.health = st.maxHealth * 0.6;
     st.changeHappiness(-12, drunk ? 'Coma etilico' : 'Sei svenuto');
-    st.stamina = st.maxStamina;
     if (drunk) {
       st.drunk = 0;
       this.drunkView = 0;
       st.changeAura(-10, 'Ti sei ubriacato fino a svenire');
     }
-    const hosp = this.world.doors.find((d) => d.type === 'hospital');
-    if (hosp) {
-      const spot = this.world.doorExitSpot(hosp);
-      this.player.setPosition(spot.x, 0.25, spot.z, spot.facing);
-      this.rig.yaw = spot.facing;
-    }
     this.hour = Math.min(23.5, this.hour + 6);
-    await this.showCaption('Ospedale', drunk ? 'Coma etilico' : 'Sei svenuto', drunk
-      ? `Hai bevuto troppo e sei crollato a terra. Ti risvegli in ospedale. Spese mediche: ${formatMoney(bill)}. (−10 Aura)`
-      : `Ti hanno soccorso e curato. Spese mediche: ${formatMoney(bill)}.`, 3200);
-    await fadeTo(0, 1.0);
+    // Ricovero: barella fino alla stanza, medico, ringraziamento, conto all'accettazione
+    await this.hospital.admit({
+      reason: drunk ? 'drunk' : 'faint',
+      bill: SERVICE_PRICES.faintBill,
+      title: drunk ? 'Coma etilico: l\'ambulanza ti porta in ospedale in barella…' : 'Sei svenuto: i paramedici ti portano in barella…',
+      sub: drunk ? 'Coma etilico (−10 Aura)' : 'Sei svenuto',
+    });
+  }
+
+  /* =====================================================================
+     Sostanze illegali: effetto allucinogeno; alla guida → burrone e ospedale
+     ===================================================================== */
+  updateHigh(dt) {
+    const st = this.state;
+    if (st.high > 0) st.high = Math.max(0, st.high - dt);
+    const target = Math.min(1, st.high / 35);
+    this.tripView += (target - this.tripView) * Math.min(1, dt * 0.8);
+    if (this.driving && st.high > 0 && !this.cliffFall && !this.transitioning) {
+      this.highDriveT += dt;
+      // Sbandamento: lo sterzo impazzisce per qualche istante, poi il burrone
+      if (this.highDriveT > 1.6) this.driving.steer = Math.sin(this.elapsed * 9) * 1.2;
+      if (this.highDriveT > 3) this.cliffCrash();
+    } else if (!this.driving) this.highDriveT = 0;
+    if (this.cliffFall) {
+      this.cliffFall.t += dt;
+      const v = this.cliffFall.v;
+      v.body.velocity.x = Math.sin(v.heading) * 16;
+      v.body.velocity.z = Math.cos(v.heading) * 16;
+      if (this.cliffFall.t > 2.4 && !this.cliffFall.done) {
+        this.cliffFall.done = true;
+        this.afterCliff();
+      }
+    }
+  }
+
+  /** Teletrasporto allucinato sul ciglio di un burrone: il mezzo precipita. */
+  async cliffCrash() {
+    if (this.cliffFall || this.transitioning) return;
+    const v = this.driving;
+    this.cliffFall = { t: 0, v, done: false };
+    this.transitioning = true;
+    audio.crash(0.6);
+    await fadeTo(1, 0.25, '#ffffff');
+    if (this.disposed) return;
+    const s = LAKE_SPOT;
+    const ground = this.world.getHeight(s.x, s.z);
+    v.teleport(s.x, s.z, s.heading, 16);
+    v.body.position.y = ground + 55;
+    v.makeDynamic();
+    this.rig.yaw = s.heading + Math.PI;
+    this.rig.pitch = 0.35;
+    this.cliffFall.t = 0;
+    audio.scream(this.character.sex === 'f');
+    await fadeTo(0, 0.25);
+    this.toast('Ma dove sei finito?! Il vuoto sotto le ruote…', 2400);
+  }
+
+  async afterCliff() {
+    const v = this.cliffFall.v;
+    await fadeTo(1, 0.4, '#000');
+    if (this.disposed) return;
+    audio.crash(1.5);
+    v.applyDamage(100);
+    v.teleport(LAKE_SPOT.x, LAKE_SPOT.z, LAKE_SPOT.heading, 0);
+    v.body.position.y = this.world.getHeight(LAKE_SPOT.x, LAKE_SPOT.z) + 0.3;
+    this.cliffFall = null;
+    this.highDriveT = 0;
+    const st = this.state;
+    st.high = 0;
+    this.tripView = 0;
+    st.health = Math.max(1, st.health * 0.3);
+    st.changeAura(-15, 'Hai guidato sotto effetto di sostanze e sei precipitato');
+    st.changeHappiness(-15, 'Precipitato nel burrone');
     this.transitioning = false;
+    await this.hospital.admit({
+      reason: 'cliff',
+      bill: SERVICE_PRICES.faintBill,
+      title: 'Sei precipitato nel burrone: l\'elisoccorso ti porta in ospedale…',
+      sub: 'Ti risvegli in ospedale (−15 Aura)',
+    });
   }
 
   /* =====================================================================
@@ -2003,6 +2336,52 @@ export class Game {
     for (const veh of this.vehicles.list) veh.mesh.visible = v && !veh.inGarage;
     this.police.setVisible(v);
     this.vehicles.smoke.setVisible(v);
+    if (this.procession) this.procession.setVisible(v);
+  }
+
+  /* =====================================================================
+     Semafori: passaggio con il rosso (multa € 500 e −3 Aura)
+     ===================================================================== */
+  /**
+   * Controllato all'ingresso in un incrocio con semaforo (incroci interni del centro): se il mezzo entra
+   * lungo l'asse che ha il rosso, scatta la multa. Il giallo è tollerato.
+   */
+  checkRedLight(dt) {
+    this.redLightCooldown = Math.max(0, this.redLightCooldown - dt);
+    const v = this.driving;
+    const phase = this.world.trafficPhase;
+    if (!v || this.interior || phase == null || phase < 0) { this.lastJunction = null; return; }
+    const p = v.body.position;
+    const i = Math.round((p.x + HALF) / CELL), j = Math.round((p.z + HALF) / CELL);
+    const ix = -HALF + i * CELL, iz = -HALF + j * CELL;
+    const inside = i >= 1 && i <= GRID - 1 && j >= 1 && j <= GRID - 1 && Math.abs(p.x - ix) < ROAD / 2 && Math.abs(p.z - iz) < ROAD / 2;
+    const key = inside ? `${i},${j}` : null;
+    if (key && key !== this.lastJunction && this.redLightCooldown <= 0) {
+      const vx = v.body.velocity.x, vz = v.body.velocity.z;
+      if (Math.hypot(vx, vz) > 2.5) {
+        const axis = Math.abs(vz) >= Math.abs(vx) ? 0 : 1; // 0 = asse Z, 1 = asse X (come i semafori)
+        const red = axis === 0 ? phase >= 2 : phase <= 1;
+        if (red) this.redLightViolation();
+      }
+    }
+    this.lastJunction = key;
+  }
+
+  redLightViolation() {
+    const st = this.state;
+    this.redLightCooldown = 4;
+    st.cash -= PENALTIES.redLightFine; // multa addebitata subito (può andare in debito)
+    st.changeAura(-PENALTIES.redLightAura, 'Sei passato con il semaforo rosso');
+    st.changeHappiness(-2, 'Multa per il rosso');
+    st.stats.redLights = (st.stats.redLights || 0) + 1;
+    audio.error();
+    audio.cameraFlash();
+    // Lampo bianco dell'autovelox/T-red
+    const flash = document.createElement('div');
+    flash.className = 'cam-flash';
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 700);
+    this.toast(`📸 Sei passato con il rosso! Multa di ${formatMoney(PENALTIES.redLightFine)} e −${PENALTIES.redLightAura} Aura.`, 3600);
   }
 
   async enterBuilding(door) {
@@ -2051,7 +2430,8 @@ export class Game {
     }
     this.currentDoor = door;
     if (this.convo.isOpen) this.convo.close();
-    if (CHURCH_TYPES.includes(door.type)) this.markChurchVisit();
+    if (CHURCH_TYPES.includes(door.type)) { this.markChurchVisit(); audio.churchBells(2); }
+    if (door.type === 'barber') setTimeout(() => audio.scissors(1.2), 600);
     if (door.type === 'restaurant' || door.type === 'pizzeria') this.restaurant = new RestaurantService(this, this.interior, door.type);
     if (door.type === 'workshop') this.workshop = new Workshop(this, this.interior);
     this.player.aiming = false;
@@ -2080,12 +2460,45 @@ export class Game {
     this.rig.maxDist = 10;
   }
 
+  /**
+   * Porta interna casa ↔ garage: si passa da un interno all'altro senza uscire in strada.
+   * Il nuovo interno si costruisce dietro una breve dissolvenza; si compare davanti alla porta interna.
+   */
+  async passInnerDoor(targetType) {
+    if (this.transitioning || !this.interior || this.driving) return;
+    const target = targetType === 'homegarage' ? this.garage.door : this.world.doors.find((d) => d.type === 'home');
+    if (!target) return;
+    this.transitioning = true;
+    this.hud.hidePrompt();
+    audio.door();
+    await fadeTo(1, 0.3, '#000');
+    if (this.disposed) return;
+    this.leaveInteriorImmediate();
+    if (!this.openInterior(target)) {
+      this.transitioning = false;
+      await fadeTo(0, 0.3);
+      return;
+    }
+    const sp = this.interior.innerDoorSpawn || this.interior.spawn;
+    this.player.setPosition(sp.x, 0, sp.z, sp.facing);
+    this.rig.yaw = sp.facing + Math.PI;
+    this.rig.pitch = 0.3;
+    this.rig.targetDist = this.rig.dist = 3.2;
+    await fadeTo(0, 0.4);
+    this.transitioning = false;
+    this.toast(target.name, 1400);
+  }
+
   async exitBuilding() {
     if (this.transitioning || !this.interior) return;
     if (this.restaurant && this.restaurant.blocksExit) {
       this.toast(this.restaurant.state === 'police' || this.restaurant.state === 'arrest'
         ? 'La polizia ti blocca l\'uscita!'
         : 'Prima di uscire devi finire e pagare il conto.', 2400);
+      return;
+    }
+    if (this.hospital.inside && this.state.hospitalBill > 0) {
+      this.toast(`Prima di uscire devi pagare le cure all'accettazione (${formatMoney(this.state.hospitalBill)}).`, 2800);
       return;
     }
     this.transitioning = true;
@@ -2136,7 +2549,7 @@ export class Game {
     if (this.paradise) {
       this.renderer.toneMappingExposure = 1;
       this.renderer.render(this.paradise.scene, this.paradise.camera);
-    } else this.drunkFx.render(this.scene, this.camera, this.drunkView, this.elapsed);
+    } else this.drunkFx.render(this.scene, this.camera, this.drunkView, this.elapsed, this.tripView);
   }
 
   resize(w, h) {
@@ -2161,9 +2574,14 @@ export class Game {
     if (this.workshop) { this.workshop.dispose(); this.workshop = null; }
     this.police.dispose();
     this.traffic.dispose();
+    this.hospital.dispose();
+    this.prayers.dispose();
+    this.procession.dispose();
     this.renderer.toneMappingExposure = 1; // il menu principale torna all'esposizione neutra
     this.escMenu.close();
+    this.escMenu.dispose();
     this.tabMenu.close();
+    this.tabMenu.dispose();
     this.hud.hide();
     this.el.ctp.classList.add('hidden');
     $('big-caption').classList.add('hidden');

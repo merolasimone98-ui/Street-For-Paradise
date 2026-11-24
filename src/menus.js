@@ -22,7 +22,7 @@ export class EscMenu {
     this.view = 'map'; // 'map' | 'stats' | 'pause'
     this.redraw = 0;
     bindUiSounds(this.root);
-    this.root.addEventListener('click', (e) => {
+    this._onClick = (e) => {
       const t = e.target.closest('[data-esc]');
       if (!t) return;
       const a = t.dataset.esc;
@@ -31,7 +31,14 @@ export class EscMenu {
       else if (a === 'resume') this.game.resume();
       else if (a === 'save') this.game.manualSave();
       else if (a === 'menu') this.askMainMenu();
-    });
+    };
+    this.root.addEventListener('click', this._onClick);
+  }
+
+  /** Smonta i listener (gli elementi HTML restano: li riusa la prossima partita). */
+  dispose() {
+    this.root.removeEventListener('click', this._onClick);
+    this.root.classList.add('hidden');
   }
 
   get isOpen() {
@@ -217,6 +224,7 @@ export class EscMenu {
         ${row('Ultima visita in chiesa', this.game.day - st.lastChurchDay === 0 ? 'Oggi' : `${this.game.day - st.lastChurchDay} giorni fa`)}${row('Case di proprietà', st.houses.length)}
         ${row('Meccanico', st.jobs.mechanic ? `Assunto · ${st.jobs.repairs} riparazioni` : 'Non assunto')}${row('Guadagni in officina', formatMoney(st.jobs.earned))}
         ${row('Rapine e scassi', st.stats.robberies)}${row('Colpi sparati', st.stats.shots)}
+        ${row('Debito', st.cash < 0 ? formatMoney(-st.cash) : 'Nessuno')}${row('Penalità Aura a zero', st.stats.debtPenalties || 0)}
         ${row('Felicità', `${st.happinessIcon()} ${Math.round(st.happiness)}% · ${esc(st.happinessTitle())}`)}${row('Veicoli in garage', `${this.game.garage.vehicles().length} / ${this.game.garage.capacity}`)}
       </div>
     </div>`;
@@ -227,7 +235,7 @@ export class EscMenu {
    TAB: inventario compatto (stile GTA V) + portafoglio.
    Il telefono è un oggetto dell'inventario: si apre solo cliccandolo.
    ===================================================================== */
-const CATS = [['all', 'Tutto'], ['cibo', 'Cibo'], ['medicinali', 'Medicine'], ['attrezzi', 'Attrezzi'], ['armi', 'Armi'], ['vestiti', 'Vestiti'], ['varie', 'Varie'], ['documenti', 'Documenti']];
+const CATS = [['all', 'Tutto'], ['cibo', 'Cibo'], ['medicinali', 'Medicine'], ['attrezzi', 'Attrezzi'], ['armi', 'Armi'], ['vestiti', 'Vestiti'], ['varie', 'Varie'], ['illegali', 'Illegali'], ['documenti', 'Documenti']];
 
 /** App del telefono (schermata Home), in ordine di griglia. */
 const PHONE_APPS = [
@@ -260,17 +268,16 @@ export class TabMenu {
     this.phoneOpen = false;
     bindUiSounds(this.root);
     bindUiSounds(this.phoneRoot);
-    const onClick = (e) => {
+    this._onClick = (e) => {
       const t = e.target.closest('[data-tb]');
       if (t) this.onAction(t.dataset.tb, t.dataset);
     };
-    this.root.addEventListener('click', onClick);
-    this.phoneRoot.addEventListener('click', onClick);
-    // Navigazione da tastiera nel telefono: Backspace = indietro, H = Home
+    this.root.addEventListener('click', this._onClick);
+    this.phoneRoot.addEventListener('click', this._onClick);
+    // Navigazione da tastiera nel telefono: Backspace = indietro (H resta il clacson)
     this._onKey = (e) => {
-      if (!this.isOpen || !this.phoneOpen) return;
+      if (!this.phoneOpen || this.game.blockingUis()) return;
       if (e.code === 'Backspace') { e.preventDefault(); this.phoneBack(); }
-      else if (e.code === 'KeyH') this.phoneGo('home', true);
     };
     window.addEventListener('keydown', this._onKey);
   }
@@ -279,29 +286,43 @@ export class TabMenu {
     return !this.root.classList.contains('hidden');
   }
 
-  /** TAB: solo l'inventario. Il telefono resta in tasca finché non lo clicchi. */
+  /** Smonta i listener: una nuova partita crea il proprio menu sugli stessi elementi HTML. */
+  dispose() {
+    this.root.removeEventListener('click', this._onClick);
+    this.phoneRoot.removeEventListener('click', this._onClick);
+    window.removeEventListener('keydown', this._onKey);
+    this.root.classList.add('hidden');
+    this.phoneRoot.classList.add('hidden');
+    this.phoneOpen = false;
+  }
+
+  /** TAB: solo l'inventario (se avevi il telefono in mano, lo riponi). */
   open() {
     this.root.classList.remove('hidden');
     this.closePhone(true);
     this.render();
   }
 
+  /** Chiude l'inventario: il telefono, se in mano, resta aperto in basso a sinistra. */
   close() {
     this.root.classList.add('hidden');
-    this.closePhone(true);
   }
 
-  /** Impugna e apre il telefono (clic sull'oggetto Telefono). */
+  /**
+   * Impugna e apre il telefono (clic sull'oggetto Telefono): l'inventario si chiude da solo e il telefono resta
+   * in basso a sinistra; si continua a camminare, guidare e interagire (il mouse resta libero per toccarlo).
+   */
   openPhone() {
     if (this.phoneOpen) return;
     this.phoneOpen = true;
     this.phoneScreen = 'home';
     this.phoneStack = [];
     this.phoneRoot.classList.remove('hidden');
+    this.game.openUi('phone');
     this.game.player.phone = true;
     this.game.player.updateHeld(this.game.state.equipped);
     this.renderPhone();
-    this.render();
+    if (this.isOpen) this.game.closeTabMenu();
     audio.phoneNotify();
   }
 
@@ -311,10 +332,10 @@ export class TabMenu {
     this.phoneOpen = false;
     this.phoneRoot.classList.add('hidden');
     this.game.player.phone = false;
-    if (was && !silent) {
-      this.game.player.updateHeld(this.game.state.equipped);
-      this.render();
-    }
+    if (!was) return;
+    this.game.player.updateHeld(this.game.state.equipped);
+    if (!silent && this.isOpen) this.render();
+    this.game.closeUi('phone');
   }
 
   phoneGo(screen, reset = false) {
@@ -368,6 +389,8 @@ export class TabMenu {
     let actions = '';
     if (it.cat === 'cibo') actions = `<button class="btn-solid small" data-tb="use" data-id="${it.id}">Mangia / Bevi</button>`;
     else if (it.cat === 'medicinali') actions = `<button class="btn-solid small" data-tb="use" data-id="${it.id}">Usa</button>`;
+    else if (it.cat === 'illegali') actions = `<button class="btn-solid small danger" data-tb="use" data-id="${it.id}">Assumi</button>`;
+    else if (ITEMS[it.id] && ITEMS[it.id].helmet) actions = `<button class="btn-solid small" data-tb="helmet" data-id="${it.id}">${st.helmet === it.id ? 'Non usarlo più' : 'Usa in moto'}</button>`;
     else if (ITEMS[it.id] && ITEMS[it.id].hold) actions = `<button class="btn-solid small" data-tb="equip" data-id="${it.id}">${st.equipped === it.id ? 'Riponi' : 'Impugna'}</button>`;
     else if (it.cat === 'vestiti') actions = `<button class="btn-solid small" data-tb="wear" data-id="${it.id}" ${it.worn ? 'disabled' : ''}>${it.worn ? 'Indossato' : 'Indossa'}</button>`;
     else if (it.id === 'carta_credito') actions = '<button class="btn-ghost small" data-tb="pin">Mostra PIN</button>';
@@ -463,7 +486,7 @@ export class TabMenu {
       <div class="ph-status"><span>${g.clockText()}</span><span>📶 5G 🔋</span></div>
       ${title}
       <div class="ph-screen ${this.phoneScreen === 'home' ? 'home' : ''}">${screen}</div>
-      <div class="ph-nav"><button data-tb="back" title="Indietro (Backspace)">‹</button><button data-tb="home" title="Home (H)">◯</button><button data-tb="phoneclose" title="Riponi il telefono">✕</button></div>
+      <div class="ph-nav"><button data-tb="back" title="Indietro (Backspace)">‹</button><button data-tb="home" title="Home">◯</button><button data-tb="phoneclose" title="Riponi il telefono">✕</button></div>
     </div>`;
   }
 
@@ -500,6 +523,11 @@ export class TabMenu {
         this.render();
         break;
       }
+      case 'helmet':
+        st.helmet = st.helmet === d.id ? null : d.id;
+        this.render();
+        msg(st.helmet ? `${itemInfo(d.id).name}: lo indosserai ogni volta che sali in sella.` : 'Niente casco: attento alle cadute!');
+        break;
       case 'pin': msg(st.bank.pin ? `PIN della carta: ${st.bank.pin}` : 'Nessun PIN.'); break;
       case 'give': {
         const npc = g.nearestNpcForGift();

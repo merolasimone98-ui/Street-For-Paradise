@@ -10,6 +10,7 @@ import { GROUPS } from './playerstate.js';
 import { formatMoney } from './birthdata.js';
 import { audio } from './audio.js';
 import { disposeObject3D } from './ui.js';
+import { localSurname } from './names.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
@@ -187,8 +188,10 @@ export class Workshop {
     const job = {
       id: this.uid++, bayIndex, bay, spec, mesh, wheels: built.wheels, body, from, to, fault,
       pay: fault.pay + Math.round(Math.random() * 6) * 10, state: 'arriving', t: 0, customer: null, look: randomLook(),
-      name: pick(['Sig. Rossi', 'Sig.ra Bianchi', 'Sig. Esposito', 'Sig.ra Ferrari', 'Sig. Romano', 'Sig.ra Colombo', 'Sig. Ricci', 'Sig.ra Greco']),
+      name: '',
     };
+    // Cliente con cognome tipico del posto (names.js)
+    job.name = `${job.look.sex === 'f' ? 'Sig.ra' : 'Sig.'} ${localSurname()}`;
     this.jobs.push(job);
     this.shutterState[bayIndex].target = 1;
     audio.door();
@@ -557,61 +560,115 @@ export class Workshop {
     setCleanup(() => clearInterval(iv));
   }
 
-  /** Bulloni: premi SPAZIO quando la lancetta della chiave dinamometrica è nella zona verde (2 passate per bullone). */
+  /**
+   * Bulloni (versione semplice): TIENI PREMUTO Spazio o il pulsante per stringere con la chiave dinamometrica
+   * e lascia quando la barra è nella zona verde (ampia). Se lasci troppo presto puoi ristringere senza errori;
+   * solo se esageri il bullone va allentato (1 errore). 5 bulloni in ordine a stella, 4 errori concessi, nessun timer.
+   */
   gameBolts(end, setCleanup, onClose) {
     const g = this.game;
     const N = 5;
-    let bolt = 0, pass = 0, misses = 0, value = 0, dir = 1, zone = 0, width = 14, speed = 70;
-    const newZone = () => {
-      width = pass === 0 ? 14 - bolt : 9 - bolt * 0.8;
-      zone = 18 + Math.random() * (78 - width);
-      speed = 70 + bolt * 16 + pass * 22;
+    const ZONE_MIN = 66, ZONE_MAX = 90, FILL = 42; // % al secondo
+    const STAR = [0, 2, 4, 1, 3]; // ordine di serraggio a stella sul mozzo
+    let bolt = 0, misses = 0, torque = 0, holding = false;
+    const hub = () => {
+      const pts = Array.from({ length: N }, (_, i) => {
+        const a = -Math.PI / 2 + (i / N) * Math.PI * 2;
+        return [60 + Math.cos(a) * 34, 60 + Math.sin(a) * 34];
+      });
+      const doneSet = new Set(STAR.slice(0, bolt));
+      const cur = STAR[bolt];
+      return `<svg class="bolt-hub" viewBox="0 0 120 120" width="150" height="150" aria-hidden="true">
+        <circle cx="60" cy="60" r="54" fill="#2a2d31" stroke="#5b6168" stroke-width="3"/>
+        <circle cx="60" cy="60" r="16" fill="#3c4148"/>
+        ${pts.map(([x, y], i) => `<g><polygon points="${Array.from({ length: 6 }, (_, k) => { const a = (k / 6) * Math.PI * 2; return `${(x + Math.cos(a) * 9).toFixed(1)},${(y + Math.sin(a) * 9).toFixed(1)}`; }).join(' ')}"
+          fill="${doneSet.has(i) ? '#3fbf6f' : i === cur ? '#ffd24a' : '#8a9098'}" stroke="#1a1c1f" stroke-width="1.5"/>
+          ${i === cur ? `<circle cx="${x}" cy="${y}" r="13" fill="none" stroke="#ffd24a" stroke-width="2" class="bolt-pulse"/>` : ''}</g>`).join('')}
+      </svg>`;
     };
-    newZone();
-    const press = () => {
-      if (value >= zone && value <= zone + width) {
-        audio.screwdriver();
-        pass++;
-        if (pass >= 2) { pass = 0; bolt++; }
-        if (bolt >= N) { end(true); return; }
-        newZone();
-        draw();
-      } else {
-        misses++;
-        audio.error();
-        if (misses >= 3) { end(false); return; }
-        draw('<p class="warn">Coppia sbagliata! Il bullone slitta.</p>');
-      }
+    const fillColor = () => (torque > ZONE_MAX ? '#e53935' : torque >= ZONE_MIN ? '#3fbf6f' : '#ffd24a');
+    const paint = () => {
+      const f = document.getElementById('tq-fill');
+      if (f) { f.style.width = `${Math.min(100, torque)}%`; f.style.background = fillColor(); }
+      const v = document.getElementById('tq-val');
+      if (v) v.textContent = `${Math.round(torque * 1.2)} Nm`;
     };
     const draw = (msg = '') => {
       g.dialogs.show({
         title: 'Minigioco · Serraggio bulloni',
-        subtitle: 'Premi SPAZIO (o il pulsante) quando la lancetta è nella zona verde. Ogni bullone va stretto due volte: accostaggio e coppia finale.',
+        subtitle: 'Tieni premuto SPAZIO (o il pulsante) per stringere e lascia quando la barra è nella zona verde. Se lasci presto, ristringi pure: conta solo non esagerare.',
         wide: true,
         onClose,
-        keyHandler: (e) => { if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) press(); } },
-        body: `<div class="mg-top"><span>Bullone <b>${Math.min(N, bolt + 1)}</b> di ${N} · ${pass === 0 ? 'accostaggio' : 'coppia finale'}</span><span>Errori: <b class="${misses ? 'warn' : ''}">${misses}/3</b></span></div>
-          <div class="bolts">${Array.from({ length: N }, (_, i) => `<span class="bolt ${i < bolt ? 'done' : i === bolt ? 'cur' : ''}">⬢</span>`).join('')}</div>
-          <div class="torque"><div class="tq-zone" style="left:${zone}%;width:${width}%"></div><div class="tq-needle" id="tq-needle"></div></div>
-          <div class="dlg-buttons"><button class="btn-solid" data-act="press">Stringi [Spazio]</button></div>${msg}`,
-        handlers: { press: () => press() },
+        keyHandler: (e) => { if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) startHold(); } },
+        body: `<div class="mg-top"><span>Bullone <b>${Math.min(N, bolt + 1)}</b> di ${N} (ordine a stella)</span><span>Errori: <b class="${misses ? 'warn' : ''}">${misses}/4</b></span></div>
+          <div class="bolt-wrap">${hub()}
+            <div class="bolt-side">
+              <div class="torque v2"><div class="tq-zone" style="left:${ZONE_MIN}%;width:${ZONE_MAX - ZONE_MIN}%"></div><div class="tq-fill" id="tq-fill"></div></div>
+              <div class="tq-scale"><span>0</span><b id="tq-val">0 Nm</b><span>120 Nm</span></div>
+              <button class="btn-solid tq-hold" id="tq-btn" type="button">Tieni premuto per stringere [Spazio]</button>
+              ${msg}
+            </div>
+          </div>`,
+        handlers: {},
       });
+      const btn = document.getElementById('tq-btn');
+      if (btn) btn.addEventListener('pointerdown', (e) => { e.preventDefault(); startHold(); });
+      paint();
     };
+    const startHold = () => {
+      if (holding) return;
+      holding = true;
+      audio.click();
+    };
+    const release = () => {
+      if (!holding) return;
+      holding = false;
+      if (torque < ZONE_MIN) {
+        paint();
+        return; // ancora lento: si può continuare a stringere, nessun errore
+      }
+      if (torque <= ZONE_MAX) {
+        audio.screwdriver();
+        bolt++;
+        torque = 0;
+        if (bolt >= N) { end(true); return; }
+        draw('<p class="ok">Perfetto! Coppia corretta: passa al bullone evidenziato.</p>');
+        return;
+      }
+      over();
+    };
+    const over = () => {
+      holding = false;
+      misses++;
+      torque = 0;
+      audio.error();
+      if (misses >= 4) { end(false); return; }
+      draw('<p class="warn">Troppo stretto! Il bullone va allentato: riprova con calma.</p>');
+    };
+    const onKeyUp = (e) => { if (e.code === 'Space') { e.preventDefault(); release(); } };
+    const onPointerUp = () => release();
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('pointerup', onPointerUp);
     draw();
     let last = performance.now();
     let raf = 0;
     const tick = (now) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      // Tempo reale (anche a pochi fotogrammi al secondo la barra sale alla stessa velocità)
+      const dt = Math.min(0.25, (now - last) / 1000);
       last = now;
-      value += dir * speed * dt;
-      if (value >= 100) { value = 100; dir = -1; }
-      if (value <= 0) { value = 0; dir = 1; }
-      const n = document.getElementById('tq-needle');
-      if (n) n.style.left = `${value}%`;
+      if (holding) {
+        torque += FILL * dt;
+        if (torque > 104) over();
+        paint();
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    setCleanup(() => cancelAnimationFrame(raf));
+    setCleanup(() => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('pointerup', onPointerUp);
+    });
   }
 
   /** Calibrazione: tre regolazioni accoppiate da portare tutte nella tolleranza, poi conferma. */
@@ -692,7 +749,8 @@ export class Workshop {
       const bay = this.freeBay();
       if (this.nextCustomer <= 0 && bay >= 0) {
         this.spawnJob(bay);
-        this.nextCustomer = 35 + Math.random() * 20;
+        // Con quattro postazioni i clienti arrivano più spesso
+        this.nextCustomer = 24 + Math.random() * 16;
       }
     }
 

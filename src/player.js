@@ -1,8 +1,8 @@
 // Giocatore (corpo fisico Cannon + modello umano animato) e camera in terza persona.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { makePerson, makeHeldItem, HumanAnimator } from './characters.js';
-import { CLOTHES, ITEMS } from './items.js';
+import { makePerson, makeHeldItem, makeHelmet, HumanAnimator } from './characters.js';
+import { CLOTHES, ITEMS, HELMETS } from './items.js';
 import { GROUPS } from './playerstate.js';
 import { disposeObject3D } from './ui.js';
 
@@ -24,7 +24,7 @@ export function lookFromOutfit(character, outfit, uniform = null) {
     return {
       height: character.height || (character.sex === 'f' ? 1.66 : 1.78), skin: character.skin, hair: character.hair,
       sex: character.sex, hairStyle: character.hairStyle || (character.sex === 'f' ? 'long' : 'short'),
-      shirt: 0x2b4f7e, sleeves: 'long', pants: 0x2b4f7e, shoes: 0x2a2a2a, cap: null, glasses: false, uniform: 'mechanic',
+      shirt: 0x2b4f7e, sleeves: 'long', pants: 0x2b4f7e, shoes: 0x2a2a2a, cap: null, glasses: false, uniform: 'mechanic', beard: !!character.beard,
     };
   }
   return {
@@ -41,6 +41,7 @@ export function lookFromOutfit(character, outfit, uniform = null) {
     bracelet: outfit.bracelet && CLOTHES[outfit.bracelet] ? CLOTHES[outfit.bracelet] : null,
     ring: outfit.ring && CLOTHES[outfit.ring] ? CLOTHES[outfit.ring] : null,
     glasses: !!(outfit.glasses && CLOTHES[outfit.glasses]),
+    beard: !!character.beard, // dal barbiere
   };
 }
 
@@ -100,6 +101,20 @@ export class Player {
     const held = this.heldKind;
     this.heldKind = null;
     this.setHeld(held);
+    const helmet = this.helmetId;
+    this.helmetId = null;
+    this.showHelmet(helmet);
+  }
+
+  /** Casco in testa (id da HELMETS) oppure null per toglierlo. Il guscio copre i capelli. */
+  showHelmet(id) {
+    if ((this.helmetId || null) === (id || null)) return;
+    const head = this.mesh.userData.head;
+    const old = head.getObjectByName('helmet');
+    if (old) { head.remove(old); disposeObject3D(old); }
+    this.helmetId = id || null;
+    const h = id ? HELMETS[id] : null;
+    if (h) head.add(makeHelmet(h.type, h.color, h.accent));
   }
 
   /** Oggetto in mano: 'phone' ha la precedenza sull'oggetto equipaggiato. */

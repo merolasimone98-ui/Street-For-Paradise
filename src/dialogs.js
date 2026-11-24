@@ -1,9 +1,10 @@
 // Finestre di dialogo del gameplay: negozi, concessionario, banca, ATM, menù ristorante, scontrino, donazioni, guardaroba.
-import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, DRINKS, TUNING, VEHICLE_DELIVERY_FEE, itemInfo } from './items.js';
+import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, DRINKS, TUNING, VEHICLE_DELIVERY_FEE, BARBER, DEALER_STOCK, ENGINE_STAGES, HELMETS, itemInfo } from './items.js';
 import { calendarHtml, dayInfo, formatDate, MONTHS_IT } from './calendar.js';
 import { formatMoney } from './birthdata.js';
 import { $ } from './ui.js';
 import { audio, bindUiSounds } from './audio.js';
+import { SPECS } from './vehicle.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
@@ -27,10 +28,11 @@ export class Dialogs {
     };
     window.addEventListener('keydown', this._onKey);
     bindUiSounds(this.root);
-    this.root.addEventListener('click', (e) => {
+    this._onClick = (e) => {
       const btn = e.target.closest('[data-act]');
       if (btn && this.handlers && this.handlers[btn.dataset.act]) this.handlers[btn.dataset.act](btn.dataset, btn);
-    });
+    };
+    this.root.addEventListener('click', this._onClick);
   }
 
   get isOpen() {
@@ -91,8 +93,9 @@ export class Dialogs {
   /* ---------- Negozi generici ---------- */
   shop(shopId) {
     if (shopId === 'clothing') return this.clothingShop();
-    const titles = { market: 'Minimarket', pharmacy: 'Farmacia', weapons: 'Armeria', bar: 'Locale "Paradise"' };
+    const titles = { market: 'Minimarket', pharmacy: 'Farmacia', weapons: 'Armeria', bar: 'Locale "Paradise"', helmets: 'Caschi & Moto Store' };
     const subs = {
+      helmets: 'Caschi omologati per moto e scooter. Dall\'inventario [TAB] scegli "Usa in moto": lo indossi ogni volta che sali in sella e dimezza i danni nelle cadute.',
       market: 'Alimentari, bevande e articoli vari.',
       pharmacy: 'I medicinali ripristinano la salute in 3 secondi quando li usi dall\'inventario [TAB].',
       weapons: 'Il <b>cacciavite speciale</b> si trova nell\'armadietto attrezzi: serve per forzare i veicoli non tuoi.',
@@ -123,6 +126,11 @@ export class Dialogs {
             this.game.state.addItem(d.id, 1);
             audio.cash();
             this.game.toast(`Acquistato: ${it.name}`);
+            // Il primo casco comprato viene subito impostato per la moto
+            if (it.helmet && !this.game.state.helmet) {
+              this.game.state.helmet = d.id;
+              this.game.toast(`${it.name}: lo indosserai in sella a moto, scooter e bici.`, 3000);
+            }
             render();
           },
         },
@@ -208,9 +216,10 @@ export class Dialogs {
     const render = (selected = {}) => {
       const rows = Object.entries(VEHICLE_MODELS).filter(([, m]) => !m.hidden).map(([id, m]) => {
         const color = selected[id] ?? m.colors[0];
+        const top = Math.round(({ ...SPECS[m.kind], ...(m.spec || {}) }).maxSpeed * 3.6);
         return `<div class="shop-row">
           <div class="shop-icon">${{ bike: '🚲', scooter: '🛵', moto: '🏍️' }[m.kind] || '🚗'}</div>
-          <div class="shop-info"><b>${esc(m.name)}</b><span class="chips inline">${m.colors.map((c) => `<button class="dot ${c === color ? 'on' : ''}" style="background:${hex(c)}" data-act="color" data-id="${id}" data-c="${c}"></button>`).join('')}</span></div>
+          <div class="shop-info"><b>${esc(m.name)}</b><small class="muted">${m.cc ? `${m.cc} cc · ` : ''}${m.gears ? `${m.gears} marce · ` : ''}max ${top} km/h</small><span class="chips inline">${m.colors.map((c) => `<button class="dot ${c === color ? 'on' : ''}" style="background:${hex(c)}" data-act="color" data-id="${id}" data-c="${c}"></button>`).join('')}</span></div>
           <button class="btn-solid small" data-act="buy" data-id="${id}" data-c="${color}">${formatMoney(m.price + fee)}</button>
         </div>`;
       }).join('');
@@ -230,6 +239,90 @@ export class Dialogs {
             audio.cash();
             this.close();
             this.game.onPurchaseVehicle(d.id, Number(d.c), delivery);
+          },
+        },
+      });
+    };
+    render();
+  }
+
+  /* ---------- Salone di bellezza / barbiere ---------- */
+  /** Seduto sulla poltrona: scegli taglio, colore e barba; il barbiere lavora e il personaggio cambia aspetto. */
+  barber(seat) {
+    const g = this.game;
+    const c = g.character;
+    const female = c.sex === 'f';
+    g.sitAt(seat);
+    const pick = { style: c.hairStyle || (female ? 'long' : 'short'), color: c.hair, beard: !!c.beard };
+    const orig = { ...pick };
+    const P = BARBER.prices;
+    const cost = () => (pick.style !== orig.style ? P.cut : 0) + (pick.color !== orig.color ? P.color : 0) + (pick.beard !== orig.beard ? P.beard : 0);
+    let done = false;
+    const render = (msg = '') => {
+      const body = `${this.payToggleHtml()}${msg}<div class="barber-grid">
+        <div class="shop-section">Taglio · ${formatMoney(P.cut)}</div>
+        <div class="chips">${BARBER.styles.map(([id, label]) => `<button class="chip ${pick.style === id ? 'on' : ''}" data-act="style" data-v="${id}">${esc(label)}</button>`).join('')}</div>
+        <div class="shop-section">Colore · ${formatMoney(P.color)}</div>
+        <div class="chips">${BARBER.colors.map(([col, label]) => `<button class="dot ${pick.color === col ? 'on' : ''}" style="background:${hex(col)}" data-act="color" data-v="${col}" title="${esc(label)}"></button>`).join('')}</div>
+        ${female ? '' : `<div class="shop-section">Stile del viso · ${formatMoney(P.beard)}</div>
+        <div class="chips"><button class="chip ${!pick.beard ? 'on' : ''}" data-act="beard" data-v="0">Viso rasato</button><button class="chip ${pick.beard ? 'on' : ''}" data-act="beard" data-v="1">Barba e baffi</button></div>`}
+        <div class="barber-total"><span>Totale</span><b>${formatMoney(cost())}</b></div>
+        <div class="chips"><button class="btn-solid" data-act="confirm" ${cost() ? '' : 'disabled'}>Conferma e paga</button><button class="btn-ghost" data-act="leave">Alzati</button></div></div>`;
+      this.show({
+        title: 'Salone di bellezza', subtitle: 'Il barbiere ti mette la mantellina: scegli il nuovo look.', wide: true, body,
+        onClose: () => { if (!done) g.standUp(); },
+        handlers: {
+          pay: (d) => { this.payMethod = d.m; render(); },
+          style: (d) => { pick.style = d.v; render(); },
+          color: (d) => { pick.color = Number(d.v); render(); },
+          beard: (d) => { pick.beard = d.v === '1'; render(); },
+          leave: () => this.close(),
+          confirm: () => {
+            const total = cost();
+            if (!g.state.payWith(total, this.payMethod)) { render('<p class="warn">Fondi insufficienti.</p>'); return; }
+            done = true;
+            audio.cash();
+            this.close();
+            g.barberWork(pick, total);
+          },
+        },
+      });
+    };
+    render();
+  }
+
+  /* ---------- Spacciatore nel vicolo (solo contanti) ---------- */
+  dealerShop(dealer) {
+    const g = this.game;
+    const s = g.state;
+    audio.voice(false, 5);
+    const render = (msg = '') => {
+      const rows = DEALER_STOCK.map((id) => {
+        const it = ITEMS[id];
+        return `<div class="shop-row"><div class="shop-icon">${it.icon}</div>
+          <div class="shop-info"><b>${esc(it.name)}</b><span>${esc(it.desc)}</span></div>
+          <div class="shop-owned">${s.count(id) ? `x${s.count(id)}` : ''}</div>
+          <button class="btn-solid small danger" data-act="buy" data-id="${id}">${formatMoney(it.price)}</button></div>`;
+      }).join('');
+      this.show({
+        title: `${dealer.name} · nel vicolo`,
+        subtitle: '«Ehi… cerchi qualcosa? Solo contanti, e non hai visto niente.» Comprare sostanze illegali toglie Aura e la polizia potrebbe accorgersene.',
+        wide: true,
+        body: `${msg}<div class="shop-list">${rows}</div>`,
+        handlers: {
+          buy: (d) => {
+            const it = ITEMS[d.id];
+            if (!s.pay(it.price)) { render('<p class="warn">«Niente soldi, niente roba.»</p>'); return; }
+            s.addItem(d.id, 1);
+            s.changeAura(-2, 'Hai comprato sostanze illegali');
+            audio.cash();
+            if (Math.random() < 0.18) {
+              this.close();
+              g.police.report(1, 'Acquisto di sostanze illegali');
+              return;
+            }
+            render(`<p class="ok">«Affare fatto. Sparisci.» (${esc(it.name)} nell'inventario)</p>`);
+            this.refreshWallet();
           },
         },
       });
@@ -272,6 +365,12 @@ export class Dialogs {
     const car = !v.spec.ride;
     const motor = v.kind !== 'bike';
     const kmh = (ms) => Math.round(ms * 3.6);
+    // Uno stage costa anche quelli precedenti non ancora montati
+    const stageCost = (stage) => {
+      let c = 0;
+      for (let k = (v.tune.engine || 0) + 1; k <= stage; k++) c += price(`engine${k}`);
+      return c;
+    };
     const fail = () => render('<p class="warn">Fondi insufficienti per questa modifica.</p>');
     const apply = (cost, label) => {
       if (cost > 0 && !s.payWith(cost, this.payMethod)) return false;
@@ -312,8 +411,7 @@ export class Dialogs {
       if (motor) {
         body += `<div class="shop-section">Meccanica</div>
           <div class="chips">
-            ${chip((t.engine || 0) >= 1, 'engine', 'data-s="1"', 'Motore stage 1 (+8% velocità, +14% accelerazione)', price('engine1'))}
-            ${chip((t.engine || 0) >= 2, 'engine', 'data-s="2"', 'Motore stage 2 (+17% velocità, +30% accelerazione)', price('engine2'))}
+            ${ENGINE_STAGES.map((st, i) => chip((t.engine || 0) >= i + 1, 'engine', `data-s="${i + 1}"`, `Motore stage ${i + 1} (+${Math.round((st.speed - 1) * 100)}% velocità, +${Math.round((st.accel - 1) * 100)}% accelerazione)`, stageCost(i + 1))).join('')}
             ${chip(t.brakes, 'brakes', '', 'Freni sportivi (+22%)', price('brakes'))}
           </div>`;
       }
@@ -356,7 +454,7 @@ export class Dialogs {
           engine: (d) => {
             const stage = Number(d.s);
             if ((v.tune.engine || 0) >= stage) return;
-            const cost = stage === 2 ? price('engine2') + ((v.tune.engine || 0) < 1 ? price('engine1') : 0) : price('engine1');
+            const cost = stageCost(stage);
             const old = v.tune.engine || 0;
             v.tune.engine = stage;
             if (!apply(cost, `Motore stage ${stage}`)) { v.tune.engine = old; v.applyTune(); fail(); }
@@ -660,7 +758,7 @@ export class Dialogs {
           },
           veh: (d) => {
             this.game.onDonate(npc, { kind: 'vehicle', uid: d.uid });
-            render(`<p class="ok">"Un veicolo? Non ci posso credere… grazie!"</p>`);
+            render(`<p class="ok">"${esc(this.game.thanks())}"</p>`);
           },
         },
       });
@@ -762,6 +860,8 @@ export class Dialogs {
 
   dispose() {
     window.removeEventListener('keydown', this._onKey);
+    this.root.removeEventListener('click', this._onClick);
+    this.handlers = null;
     this.openFlag = false;
     this.root.classList.add('hidden');
     this.box.innerHTML = '';

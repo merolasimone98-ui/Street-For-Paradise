@@ -288,6 +288,7 @@ export class HUD {
       this.textTimer = 0.2;
       if (this.isCardOpen()) this.renderCard(this.cardState);
       this.setText('money', formatMoney(s.money));
+      this.el.money.classList.toggle('debt', s.money < 0); // debito in rosso
       this.setText('age', `${s.age} anni`);
       this.setText('day', `Giorno ${s.day}`);
       const hh = Math.floor(s.hour);

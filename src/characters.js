@@ -364,6 +364,96 @@ export function makePerson(opts = {}) {
   return g;
 }
 
+/**
+ * Casco da moto (coordinate della testa: centro del cranio a y ≈ 0.12). type: 'integrale' | 'adventure' | 'cross' | 'modulare' | 'jet'.
+ * Guscio con vernice lucida (clearcoat), visiera fumé o chiara, mentoniera/frontino a seconda del modello.
+ */
+export function makeHelmet(type = 'integrale', color = 0x1b1d22, accent = 0xc53030) {
+  const g = new THREE.Group();
+  g.name = 'helmet';
+  const shell = new THREE.MeshPhysicalMaterial({ color, roughness: 0.32, metalness: 0.15, clearcoat: 1, clearcoatRoughness: 0.06 });
+  const acc = new THREE.MeshPhysicalMaterial({ color: accent, roughness: 0.35, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0.08 });
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.85 });
+  const smoke = new THREE.MeshPhysicalMaterial({ color: 0x0e1218, roughness: 0.04, metalness: 0.3, transparent: true, opacity: 0.82, clearcoat: 1 });
+  const clear = new THREE.MeshPhysicalMaterial({ color: 0xcfe0ea, roughness: 0.03, transparent: true, opacity: 0.32, clearcoat: 1 });
+  const open = type === 'jet';
+  // Guscio: calotta che copre nuca e tempie (il jet lascia scoperto il viso)
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.142, 28, 20, 0, Math.PI * 2, 0, Math.PI * (open ? 0.62 : 0.7)), shell);
+  dome.scale.set(0.95, 1.0, 1.08);
+  dome.position.y = 0.12;
+  g.add(dome);
+  const back = new THREE.Mesh(new THREE.SphereGeometry(0.14, 24, 14, Math.PI * 0.55, Math.PI * 0.9, Math.PI * 0.45, Math.PI * 0.4), shell);
+  back.scale.set(0.95, 1.05, 1.05);
+  back.position.y = 0.12;
+  g.add(back);
+  // Striscia decorativa del colore d'accento
+  const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.143, 0.009, 6, 40, Math.PI), acc);
+  stripe.rotation.set(0, Math.PI / 2, 0);
+  stripe.position.y = 0.12;
+  g.add(stripe);
+  // Bordo inferiore in gomma
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.012, 8, 28), rubber);
+  rim.rotation.x = Math.PI / 2;
+  rim.position.y = open ? 0.06 : 0.0;
+  rim.scale.set(1, 1.12, 1);
+  g.add(rim);
+  if (type === 'integrale' || type === 'adventure' || type === 'modulare') {
+    // Mentoniera chiusa e visiera
+    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.115, 20, 12, -Math.PI * 0.38, Math.PI * 0.76, Math.PI * 0.55, Math.PI * 0.4), type === 'modulare' ? acc : shell);
+    chin.scale.set(1, 1, 1.25);
+    chin.position.set(0, 0.11, 0.015);
+    g.add(chin);
+    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.146, 22, 10, -Math.PI * 0.33, Math.PI * 0.66, Math.PI * 0.32, Math.PI * 0.2), type === 'modulare' ? clear : smoke);
+    visor.scale.set(0.96, 1, 1.1);
+    visor.position.y = 0.115;
+    g.add(visor);
+    if (type === 'modulare') {
+      for (const sx of [-1, 1]) {
+        const hinge = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.012, 14), rubber);
+        hinge.rotation.z = Math.PI / 2;
+        hinge.position.set(sx * 0.137, 0.09, 0.02);
+        g.add(hinge);
+      }
+    }
+  }
+  if (type === 'adventure' || type === 'cross') {
+    // Frontino parasole
+    const peak = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.012, 0.13), acc);
+    peak.position.set(0, 0.245, 0.11);
+    peak.rotation.x = -0.28;
+    g.add(peak);
+  }
+  if (type === 'cross') {
+    // Mentoniera lunga e sporgente, occhiali da cross con elastico
+    const chin = new THREE.Mesh(new THREE.ConeGeometry(0.075, 0.16, 16, 1, true), acc);
+    chin.rotation.x = Math.PI / 2;
+    chin.position.set(0, 0.055, 0.14);
+    g.add(chin);
+    const goggles = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.055, 0.03), smoke);
+    goggles.position.set(0, 0.13, 0.128);
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.065, 0.02), rubber);
+    frame.position.set(0, 0.13, 0.118);
+    const strap = new THREE.Mesh(new THREE.TorusGeometry(0.143, 0.012, 6, 32), rubber);
+    strap.rotation.x = Math.PI / 2;
+    strap.position.y = 0.13;
+    g.add(frame, goggles, strap);
+  }
+  if (type === 'jet') {
+    // Visierina corta trasparente con bottoni laterali
+    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.15, 22, 10, -Math.PI * 0.36, Math.PI * 0.72, Math.PI * 0.3, Math.PI * 0.27), clear);
+    visor.position.y = 0.115;
+    g.add(visor);
+    for (const sx of [-1, 1]) {
+      const snap = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.01, 12), acc);
+      snap.rotation.z = Math.PI / 2;
+      snap.position.set(sx * 0.14, 0.15, 0.05);
+      g.add(snap);
+    }
+  }
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
 /** Oggetto da tenere in mano (cacciavite, telefono, bicchiere, ecc.). */
 export function makeHeldItem(kind) {
   const g = new THREE.Group();
@@ -545,6 +635,19 @@ export class HumanAnimator {
       t.handR = Math.sin(this.time * 18) * 0.35;
       t.armLz = 0.25; t.armRz = -0.2;
       rate = 10;
+    } else if (state === 'pray') {
+      // In ginocchio davanti all'altare, busto chino, mani giunte davanti al petto
+      t.hipsY = 0.5;
+      t.thighL = t.thighR = -0.12;
+      t.shinL = t.shinR = 1.55;
+      t.footL = t.footR = 0.55;
+      t.spineX = 0.32 + Math.sin(this.time * 0.8) * 0.02;
+      t.headX = 0.45;
+      t.armLx = t.armRx = -0.62;
+      t.armLz = 0.32; t.armRz = -0.32;
+      t.foreL = t.foreR = -1.65;
+      t.handL = t.handR = 0.25;
+      rate = 6;
     } else if (!grounded || state === 'jump') {
       t.thighL = -0.95; t.thighR = -0.25;
       t.shinL = 1.25; t.shinR = 0.55;

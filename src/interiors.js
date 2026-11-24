@@ -2,7 +2,10 @@
 // Ogni interno viene costruito al momento dell'ingresso in una zona remota della mappa e distrutto all'uscita.
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { makePerson, HumanAnimator, randomLook } from './characters.js';
+import { makePerson, HumanAnimator, randomLook, makeHelmet } from './characters.js';
+import { HELMETS } from './items.js';
+import { buildVehicleMesh } from './vehicle.js';
+import { makeCrucifix, makeMadonna, frescoTexture } from './sacred.js';
 import { disposeObject3D } from './ui.js';
 import { seededRandom } from './birthdata.js';
 import { tr } from './i18n.js';
@@ -295,6 +298,22 @@ export class Interior {
     return m;
   }
 
+  /**
+   * Porta interna tra due ambienti (casa ↔ garage) su una parete laterale. (x, z) è il centro della porta
+   * sul muro, side = +1 parete destra (+X) / −1 parete sinistra (−X). Crea il [E] e il punto d'arrivo.
+   */
+  innerDoor(x, z, side, label, action, signText) {
+    const wood = std(0x5a3e2b, { roughness: 0.55 });
+    const frame = std(0xe9e4da, { roughness: 0.5 });
+    const rotY = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+    this.box(0.08, 2.2, 1.18, frame, x - side * 0.02, 1.1, z);
+    this.box(0.06, 2.08, 1.0, wood, x - side * 0.05, 1.04, z);
+    this.box(0.05, 0.05, 0.16, std(0xc9a646, { metalness: 0.9, roughness: 0.25 }), x - side * 0.1, 1.0, z - 0.36);
+    this.sign(signText, '#f0b43c', 0.9, 0.22, x - side * 0.09, 2.36, z, rotY);
+    this.interact(x - side * 0.8, z, label, action, {}, 1.2);
+    this.innerDoorSpawn = { ...this.toWorld(x - side * 1.4, 0, z), facing: side > 0 ? -Math.PI / 2 : Math.PI / 2 };
+  }
+
   sign(text, color, w, h, x, y, z, rotY = 0, bg) {
     const mat = new THREE.MeshBasicMaterial({ map: signTexture(text, color, bg), toneMapped: false });
     return this.mesh(new THREE.PlaneGeometry(w, h), mat, x, y, z, rotY);
@@ -311,6 +330,20 @@ export class Interior {
     const anim = new HumanAnimator(p);
     const phase = this.rng() * 10;
     this.animators.push((t, dt) => anim.update(dt, { speed: 0, look: Math.sin(t * 0.4 + phase) * 0.4 }));
+    return p;
+  }
+
+  /** NPC seduto (panche, sale d'attesa): animatore in posa 'sit', nessun collider proprio (c'è già quello della seduta). */
+  npcSit(opts, x, z, rotY, seatY) {
+    const base = randomLook(this.rng);
+    const p = makePerson({ ...base, height: 1.6 + this.rng() * 0.2, ...opts });
+    p.position.set(x, seatY - p.userData.hipHeight + 0.05, z);
+    p.rotation.y = rotY;
+    p.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    this.group.add(p);
+    const anim = new HumanAnimator(p);
+    const phase = this.rng() * 10;
+    this.animators.push((t, dt) => anim.update(dt, { speed: 0, state: 'sit', look: Math.sin(t * 0.3 + phase) * 0.25 }));
     return p;
   }
 
@@ -475,6 +508,79 @@ export class Interior {
 /* =====================================================================
    Costruttori dei singoli interni
    ===================================================================== */
+/**
+ * Arredi e decorazioni in più per le case: quadri, libreria, lampada da terra, tappeto d'ingresso,
+ * orologio da parete, mensola con soprammobili, piante e scarpiera. Il livello (tier) cambia colori e quantità.
+ */
+function decorateHome(I, w, d, h, tier) {
+  const rng = I.rng;
+  const poor = tier === 'poor';
+  const frameMat = std(tier === 'rich' ? 0xc9a646 : 0x2b2522, { metalness: tier === 'rich' ? 0.8 : 0, roughness: 0.4 });
+  // Quadri (tele con macchie di colore astratte)
+  const art = (x, y, z, rotY, fw, fh) => {
+    const tex = canvasTex(128, (g, s) => {
+      g.fillStyle = `hsl(${Math.floor(rng() * 360)},35%,${60 + Math.floor(rng() * 20)}%)`;
+      g.fillRect(0, 0, s, s);
+      for (let i = 0; i < 6; i++) {
+        g.fillStyle = `hsla(${Math.floor(rng() * 360)},55%,${35 + Math.floor(rng() * 35)}%,0.85)`;
+        g.beginPath();
+        g.arc(rng() * s, rng() * s, 10 + rng() * 40, 0, Math.PI * 2);
+        g.fill();
+      }
+    });
+    const nx = Math.sin(rotY), nz = Math.cos(rotY);
+    const fr = I.box(fw + 0.08, fh + 0.08, 0.04, frameMat, x, y, z, { rotY });
+    fr.castShadow = false;
+    I.mesh(new THREE.PlaneGeometry(fw, fh), std(0xffffff, { map: tex, roughness: 0.7 }), x + nx * 0.025, y, z + nz * 0.025, rotY);
+  };
+  art(-1.2, 1.75, -d / 2 + 0.03, 0, 0.9, 0.65);
+  if (!poor) art(w / 2 - 0.03, 1.7, tier === 'rich' ? 2.2 : 0.8, -Math.PI / 2, 0.7, 0.9);
+  // Libreria con libri colorati (parete sinistra, verso l'ingresso)
+  if (!poor) {
+    const bx = -w / 2 + 0.22, bz = d / 2 - 1.6;
+    I.box(0.4, 1.9, 1.1, std(0x5a3e2b, { roughness: 0.6 }), bx, 0.95, bz, { solid: true, shadow: true });
+    for (let shelf = 0; shelf < 4; shelf++) {
+      let z = bz - 0.48;
+      while (z < bz + 0.45) {
+        const t = 0.04 + rng() * 0.05, bh = 0.22 + rng() * 0.12;
+        I.box(0.26, bh, t, std([0x8a2b2b, 0x2b4a8a, 0x2f6b3f, 0xc9a646, 0x6b46c1, 0xe9e4da][Math.floor(rng() * 6)], { roughness: 0.7 }), bx + 0.06, 0.2 + shelf * 0.45 + bh / 2, z + t / 2);
+        z += t + 0.012;
+      }
+    }
+  }
+  // Lampada da terra accanto al divano (solo emissione, nessuna luce in più)
+  if (!poor) {
+    const lx = -w / 2 + 3.4, lz = 2.2;
+    I.box(0.04, 1.5, 0.04, std(0x2b2b2e, { metalness: 0.7 }), lx, 0.75, lz);
+    I.mesh(new THREE.CylinderGeometry(0.16, 0.24, 0.3, 20, 1, true), new THREE.MeshStandardMaterial({ color: 0xf3e6cc, emissive: 0xffd9a0, emissiveIntensity: 0.6, side: THREE.DoubleSide }), lx, 1.55, lz);
+    I.mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.03, 20), std(0x2b2b2e), lx, 0.015, lz);
+  }
+  // Tappeto d'ingresso e scarpiera
+  const mat = I.mesh(new THREE.PlaneGeometry(1.6, 0.9), std(poor ? 0x5b4f40 : 0x7a3b2b, { roughness: 1 }), 0, 0.012, d / 2 - 1.1);
+  mat.rotation.x = -Math.PI / 2;
+  I.box(0.9, 0.5, 0.35, std(poor ? 0x6e6151 : 0xe9e4da, { roughness: 0.6 }), w / 2 - 1.7, 0.25, d / 2 - 0.25, { solid: true });
+  // Orologio da parete
+  const clockTex = canvasTex(128, (g, s) => {
+    g.fillStyle = '#f4f1ea'; g.beginPath(); g.arc(s / 2, s / 2, s / 2 - 2, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#222'; g.lineWidth = 6; g.stroke();
+    g.fillStyle = '#222';
+    for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; g.fillRect(s / 2 + Math.sin(a) * 50 - 2, s / 2 - Math.cos(a) * 50 - 2, 4, 4); }
+    g.lineWidth = 5; g.beginPath(); g.moveTo(s / 2, s / 2); g.lineTo(s / 2 + 20, s / 2 - 26); g.moveTo(s / 2, s / 2); g.lineTo(s / 2 - 34, s / 2 + 6); g.stroke();
+  });
+  I.mesh(new THREE.CircleGeometry(0.2, 32), std(0xffffff, { map: clockTex, roughness: 0.5 }), 1.2, 2.1, -d / 2 + 0.02);
+  // Mensola con soprammobili sopra il divano e piante per tutte le case tranne la più povera
+  if (!poor) {
+    I.box(1.4, 0.04, 0.22, std(0x6b4a32), -w / 2 + 0.13, 1.85, 0.6, { rotY: Math.PI / 2 });
+    for (let i = 0; i < 4; i++) {
+      I.mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.12 + rng() * 0.12, 12), std([0x2f6b3f, 0xc9a646, 0x8a2b2b, 0x2b4a8a][i], { roughness: 0.4 }), -w / 2 + 0.13, 1.95, 0.1 + i * 0.33);
+    }
+    if (tier !== 'rich') I.plant(w / 2 - 0.5, -d / 2 + 2.8, 1.0);
+    I.plant(-w / 2 + 0.5, -d / 2 + 2.9, 0.8);
+  } else {
+    I.mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.25, 12), std(0x7a4b32), w / 2 - 0.5, 0.125, -d / 2 + 3.0);
+  }
+}
+
 const BUILDERS = {
   /* ---------------- CASA / APPARTAMENTO ---------------- */
   home(I, ctx) {
@@ -569,6 +675,9 @@ const BUILDERS = {
         stain.castShadow = false;
       }
     }
+    decorateHome(I, w, d, h, tier);
+    // Porta interna verso il garage (solo nella casa principale: il garage è accanto alla sua porta)
+    if (I.door.type === 'home') I.innerDoor(w / 2, d / 2 - 1.9, 1, 'andare in garage (porta interna)', 'togarage', 'GARAGE');
     return { w, d, h };
   },
 
@@ -593,7 +702,7 @@ const BUILDERS = {
     I.box(6.1, 0.05, 0.95, std(0x3f8f80, { roughness: 0.3 }), 0, 1.13, -3);
     I.box(0.5, 0.35, 0.05, std(0x111111), -1.2, 1.35, -3.3);
     I.npc({ skin: I.randomSkin(), shirt: 0xe6f0ee, pants: 0xe6f0ee, hair: 0x2a2018, sex: 'f' }, -0.5, -4.2, 0);
-    I.interact(-0.5, -2.1, 'farti visitare (cure complete € 380)', 'hospital', {}, 1.8);
+    I.interact(-0.5, -2.1, 'parlare con l\'accettazione (visita · conto)', 'hospital', {}, 1.8);
     I.npc({ skin: I.randomSkin(), shirt: 0x3f8f80, pants: 0x3f8f80, hair: 0x1a1410, sex: 'm' }, 1.6, -4.4, -0.3);
     I.sign('ACCETTAZIONE', '#9df5dc', 4, 0.6, 0, 3.2, -d / 2 + 0.02, 0);
     I.sign('PRONTO SOCCORSO  →', '#ff6b6b', 3.6, 0.5, w / 2 - 0.02, 2.8, -3, -Math.PI / 2);
@@ -621,10 +730,26 @@ const BUILDERS = {
     I.box(0.05, 1.3, 0.6, new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x9fd8ff, emissiveIntensity: 1.1 }), w / 2 - 1.27, 1.15, 2.5);
     I.plant(w / 2 - 0.7, -d / 2 + 0.7, 1.3);
     I.plant(-w / 2 + 0.7, -d / 2 + 0.7, 1.3);
-    I.box(0.8, 0.08, 2.0, std(0xf2f2f2), 5.5, 0.8, 2.2, { solid: true });
-    I.box(0.05, 0.8, 0.05, frame, 5.2, 0.4, 1.4);
-    I.box(0.05, 0.8, 0.05, frame, 5.8, 0.4, 3.0);
-    I.box(0.6, 0.12, 0.35, std(0xffffff), 5.5, 0.9, 1.5);
+    // Stanza di ricovero: letto, monitor, flebo e tenda (dove arrivi in barella)
+    const bx = 6.4, bz = 4.9;
+    I.box(2.1, 0.5, 1.0, std(0xdfe6e4, { metalness: 0.3, roughness: 0.4 }), bx, 0.25, bz, { solid: true, shadow: true });
+    I.box(2.0, 0.16, 0.92, std(0xffffff, { roughness: 1 }), bx, 0.58, bz);
+    I.box(0.5, 0.1, 0.62, std(0xf4f6ff, { roughness: 1 }), bx + 0.7, 0.71, bz);
+    I.box(0.06, 0.8, 1.0, frame, bx + 1.05, 0.65, bz);
+    const monitor = new THREE.MeshStandardMaterial({ color: 0x050a08, emissive: 0x3dff8a, emissiveIntensity: 0.9 });
+    I.box(0.45, 0.32, 0.05, std(0x1b1d20), bx + 1.15, 1.45, bz - 0.75);
+    const screen = I.box(0.4, 0.26, 0.01, monitor, bx + 1.15, 1.45, bz - 0.72);
+    screen.castShadow = false;
+    I.animators.push((t) => { monitor.emissiveIntensity = 0.6 + (Math.sin(t * 7.5) > 0.92 ? 0.8 : 0); });
+    I.box(0.03, 1.8, 0.03, frame, bx - 0.9, 0.9, bz - 0.7);
+    I.box(0.14, 0.22, 0.06, std(0xd8f0ff, { transparent: true, opacity: 0.7 }), bx - 0.9, 1.7, bz - 0.7);
+    const curtain = std(0x9fd1c4, { roughness: 1, side: THREE.DoubleSide });
+    const cur = I.mesh(new THREE.PlaneGeometry(2.6, 2.2), curtain, bx - 0.1, 1.15, bz - 1.4);
+    cur.castShadow = false;
+    I.box(2.8, 0.03, 0.03, frame, bx - 0.1, 2.28, bz - 1.4);
+    I.sign('RICOVERO', '#9df5dc', 1.6, 0.35, bx, 2.6, d / 2 - 0.02, Math.PI);
+    // Coordinate (locali) usate dalla sequenza della barella
+    I.ward = { bed: { x: bx, z: bz }, entrance: { x: 0, z: d / 2 - 1.6 }, side: { x: bx - 1.6, z: bz + 0.1 }, doctor: { x: bx, z: bz - 1.0 } };
     return { w, d, h };
   },
 
@@ -753,12 +878,12 @@ const BUILDERS = {
     for (const x of [-6, 6]) for (const z of [-4, 4]) I.light(x, h - 0.5, z, 0xf4f8ff, 26, { fixture: 'panel', shadow: x === -6 && z === -4 });
     I.sign('OFFICINA MECCANICA', '#ffb347', 7, 0.8, 0, h - 1.1, -d / 2 + 0.02, 0, 'rgba(28,18,6,0.95)');
 
-    // Due baie di lavoro con serranda sul retro (da lì entrano ed escono le auto dei clienti)
+    // Quattro baie di lavoro con serranda sul retro (da lì entrano ed escono le auto dei clienti)
     const yellow = std(0xf0b43c, { roughness: 0.6 });
     const shutter = std(0x9aa3ab, { metalness: 0.7, roughness: 0.35 });
     I.bays = [];
     I.shutters = [];
-    for (const bx of [-6, 6]) {
+    for (const bx of [-9, -3, 3, 9]) {
       for (const sx of [-1.6, 1.6]) I.box(0.1, 0.01, 6.4, yellow, bx + sx, 0.015, -3.2);
       I.box(3.3, 0.01, 0.1, yellow, bx, 0.015, -6.4);
       const sh = I.box(4.6, 4.2, 0.1, shutter, bx, 2.1, -d / 2 + 0.1);
@@ -767,9 +892,21 @@ const BUILDERS = {
       I.shutters.push(sh);
       I.bays.push({ x: I.toWorld(bx, 0, 0).x, z: I.toWorld(0, 0, -3.2).z, local: { x: bx, z: -3.2 }, heading: 0 });
     }
-    // Ponte sollevatore accanto alla baia destra, colonnine
+    // Ponte sollevatore tra le due baie di destra, colonnine; numeri delle postazioni a terra
     const liftMat = std(0xd9a62b, { metalness: 0.5, roughness: 0.4 });
-    for (const sz of [-5.8, -0.6]) I.box(0.35, 2.8, 0.35, liftMat, 6 + 2.15, 1.4, sz, { solid: true, shadow: true });
+    for (const sz of [-5.8, -0.6]) I.box(0.35, 2.8, 0.35, liftMat, 5.9, 1.4, sz, { solid: true, shadow: true });
+    [-9, -3, 3, 9].forEach((bx, i) => {
+      const num = canvasTex(128, (g, s) => {
+        g.clearRect(0, 0, s, s);
+        g.fillStyle = '#f0b43c';
+        g.font = '700 96px "Oswald", "Impact", sans-serif';
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.fillText(String(i + 1), s / 2, s / 2 + 6);
+      });
+      const n = I.mesh(new THREE.PlaneGeometry(0.9, 0.9), std(0xffffff, { map: num, transparent: true, depthWrite: false, roughness: 0.6 }), bx, 0.018, 0.6);
+      n.rotation.x = -Math.PI / 2;
+    });
     // Banco attrezzi con pannello portautensili
     const red = std(0x8a2b2b, { metalness: 0.4, roughness: 0.5 });
     I.box(0.8, 0.95, 5, red, -w / 2 + 0.6, 0.475, -1, { solid: true, shadow: true });
@@ -784,11 +921,12 @@ const BUILDERS = {
       I.mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.9, 18), drum, x, 0.45, z).castShadow = true;
       I.addBody(0.6, 0.9, 0.6, x, 0.45, z);
     }
+    // Pile di pneumatici tra la prima e la seconda baia (fuori dal percorso delle auto)
     const tire = std(0x151515, { roughness: 0.9 });
-    for (let s = 0; s < 3; s++) for (let i = 0; i < 4; i++) {
-      I.mesh(new THREE.TorusGeometry(0.32, 0.13, 10, 20), tire, -w / 2 + 0.9 + s * 0.9, 0.13 + i * 0.26, -8.7).rotation.x = Math.PI / 2;
+    for (let s = 0; s < 2; s++) for (let i = 0; i < 4; i++) {
+      I.mesh(new THREE.TorusGeometry(0.32, 0.13, 10, 20), tire, -6.45 + s * 0.9, 0.13 + i * 0.26, -8.7).rotation.x = Math.PI / 2;
     }
-    I.addBody(2.8, 1.1, 0.9, -w / 2 + 1.8, 0.55, -8.7);
+    I.addBody(1.9, 1.1, 0.9, -6.0, 0.55, -8.7);
     // Accettazione con computer dell'officina
     const desk = std(0x5a3e2b, { roughness: 0.55 });
     I.box(3.2, 1.0, 0.8, desk, 8.6, 0.5, 6.2, { solid: true, shadow: true });
@@ -1090,6 +1228,8 @@ const BUILDERS = {
     const pewMat = std(0x5a3a24, { roughness: 0.55 });
     const pewW = variant === 'chapel' ? 3.6 : 4.6;
     const pewX = variant === 'chapel' ? 2.6 : 3.6;
+    // Panche con posti a sedere: i fedeli (NPC) occupano alcuni posti, gli altri sono liberi per te
+    I.pews = [];
     for (let z = -d / 2 + 8; z < d / 2 - 5; z += 2) {
       for (const sx of [-1, 1]) {
         const x = sx * pewX;
@@ -1098,15 +1238,68 @@ const BUILDERS = {
         I.box(0.08, 0.46, 0.5, pewMat, x - pewW / 2 + 0.05, 0.23, z);
         I.box(0.08, 0.46, 0.5, pewMat, x + pewW / 2 - 0.05, 0.23, z);
         I.addBody(pewW, 1.1, 0.6, x, 0.55, z + 0.05);
+        const seats = [];
+        for (let k = 0; k < Math.floor(pewW / 0.75); k++) seats.push({ x: x - pewW / 2 + 0.45 + k * 0.75, taken: false });
+        const pew = { x, z, seats, aisleX: sx < 0 ? x + pewW / 2 + 0.45 : x - pewW / 2 - 0.45 };
+        I.pews.push(pew);
+        I.interact(pew.aisleX, z + 0.1, 'sederti nel banco (Messa)', 'pew', { pew }, 0.9);
       }
     }
+    // Fedeli seduti tra i banchi (6-11 persone, posti casuali)
+    const faithful = 6 + Math.floor(rng() * 6);
+    for (let n = 0; n < faithful; n++) {
+      const pew = I.pews[Math.floor(rng() * I.pews.length)];
+      const free = pew.seats.filter((s) => !s.taken);
+      if (!free.length) continue;
+      const seat = free[Math.floor(rng() * free.length)];
+      seat.taken = true;
+      I.npcSit({ sex: rng() < 0.55 ? 'f' : 'm', sleeves: 'long' }, seat.x, pew.z, Math.PI, 0.5);
+    }
+    // Qualcuno in piedi in fondo e vicino alle candele
+    I.npc({ sex: 'f', sleeves: 'long', shirt: 0x2f3b55 }, -(w / 2 - 2.2), d / 2 - 4, Math.PI);
     // Presbiterio, altare e croce
     I.box(Math.min(10, w - 2), 0.4, 4, std(0xe8e0d0, { roughness: 0.3 }), 0, 0.2, -d / 2 + 2.2, { solid: true });
     I.box(2.6, 1.0, 1.0, std(0xf4efe4, { roughness: 0.3 }), 0, 0.9, -d / 2 + 2.4, { solid: true, shadow: true });
     I.box(2.8, 0.05, 1.1, std(0xffffff, { roughness: 0.9 }), 0, 1.42, -d / 2 + 2.4);
     const gold = std(0xd6a73a, { metalness: 0.95, roughness: 0.25 });
-    I.box(0.25, 3.2, 0.2, gold, 0, Math.min(5.2, h - 2), -d / 2 + 0.2);
-    I.box(1.7, 0.25, 0.2, gold, 0, Math.min(6.0, h - 1.2), -d / 2 + 0.2);
+    // Grande crocifisso al centro, sopra l'altare (appeso alla parete di fondo) e croce d'altare sulla mensa
+    const bigCross = makeCrucifix(Math.min(4.2, h - 2.4));
+    bigCross.position.set(0, Math.max(1.9, h - 2.2 - Math.min(4.2, h - 2.4)), -d / 2 + 0.25);
+    I.group.add(bigCross);
+    const altarCross = makeCrucifix(0.7, { wood: 0xc9a646, body: 0xf1e2c0 });
+    altarCross.position.set(0, 1.45, -d / 2 + 2.2);
+    I.group.add(altarCross);
+    for (const sx of [-0.9, 0.9]) {
+      I.mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.4, 10), gold, sx, 1.65, -d / 2 + 2.4);
+      I.mesh(new THREE.ConeGeometry(0.018, 0.05, 6), new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffa040, emissiveIntensity: 2.2 }), sx, 1.88, -d / 2 + 2.4);
+    }
+    // Statua della Madonna nell'angolo a destra dell'altare, su un piedistallo con fiori
+    const presW = Math.min(10, w - 2);
+    const mx = presW / 2 - 0.8, mz = -d / 2 + 1.0;
+    I.box(0.9, 0.6, 0.9, std(0xe9e2d2, { roughness: 0.4 }), mx, 0.7, mz, { solid: true, shadow: true });
+    const madonna = makeMadonna(variant === 'cathedral' ? 2.0 : 1.6);
+    madonna.position.set(mx, 1.0, mz);
+    madonna.rotation.y = -0.35;
+    I.group.add(madonna);
+    for (const [fx, fz] of [[-0.32, 0.32], [0.32, 0.32]]) {
+      I.mesh(new THREE.CylinderGeometry(0.08, 0.06, 0.16, 10), std(0xc9a646, { metalness: 0.8, roughness: 0.3 }), mx + fx, 1.08, mz + fz);
+      I.mesh(new THREE.IcosahedronGeometry(0.11, 0), std(fx < 0 ? 0xf4f1ea : 0x5d8de0, { roughness: 0.8 }), mx + fx, 1.22, mz + fz);
+    }
+    const madonnaGlow = madonna.userData.glowMat;
+    I.animators.push((t) => { if (madonnaGlow) madonnaGlow.emissiveIntensity = 0.9 + Math.sin(t * 1.5) * 0.2; });
+    // Affreschi sul soffitto lungo la navata, con cornici dorate
+    const nFresco = Math.max(2, Math.floor((d - 6) / 7));
+    const fw = Math.min(w - 4, 8);
+    for (let i = 0; i < nFresco; i++) {
+      const z = -d / 2 + 4 + i * ((d - 8) / Math.max(1, nFresco - 1));
+      const fresco = I.mesh(new THREE.PlaneGeometry(fw, Math.min(6, (d - 8) / nFresco + 1)), std(0xffffff, { map: frescoTexture(i + (variant === 'cathedral' ? 1 : 0)), roughness: 0.85 }), 0, h - 0.04, z);
+      fresco.rotation.x = Math.PI / 2;
+      fresco.castShadow = false;
+      I.box(fw + 0.4, 0.12, 0.2, gold, 0, h - 0.08, z - Math.min(6, (d - 8) / nFresco + 1) / 2);
+      I.box(fw + 0.4, 0.12, 0.2, gold, 0, h - 0.08, z + Math.min(6, (d - 8) / nFresco + 1) / 2);
+    }
+    // Piante ornamentali ai lati del presbiterio
+    I.plant(-(presW / 2 - 0.5), -d / 2 + 4.6, 1.0);
     // Candelabro votivo con candele tremolanti
     const flames = [];
     const cxv = Math.min(4.5, w / 2 - 1.6);
@@ -1120,8 +1313,20 @@ const BUILDERS = {
     const candleLight = new THREE.PointLight(0xffa040, 3, 6, 2);
     candleLight.position.set(cxv, 1.3, -d / 2 + 4.2);
     I.group.add(candleLight);
+    // Zona delle candele votive del giocatore: ripiano davanti al candelabro con posti liberi
+    I.box(1.4, 0.05, 0.3, std(0x2a201a), cxv, 0.92, -d / 2 + 4.62);
+    const slots = [];
+    for (let i = 0; i < 12; i++) slots.push({ x: cxv - 0.6 + (i % 6) * 0.24, z: -d / 2 + 4.55 + Math.floor(i / 6) * 0.12, used: false });
+    I.lightCandle = () => {
+      const s = slots.find((q) => !q.used);
+      if (!s) return false;
+      s.used = true;
+      I.mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.1, 8), std(0xfaf6ea), s.x, 0.99, s.z);
+      flames.push(I.mesh(new THREE.ConeGeometry(0.016, 0.045, 6), flameMat, s.x, 1.065, s.z));
+      return true;
+    };
     I.animators.push((t) => {
-      candleLight.intensity = 2.6 + Math.sin(t * 13) * 0.4 + Math.sin(t * 7.3) * 0.3;
+      candleLight.intensity = 2.6 + Math.min(4, flames.length * 0.12) + Math.sin(t * 13) * 0.4 + Math.sin(t * 7.3) * 0.3;
       flames.forEach((f, i) => { f.scale.y = 1 + Math.sin(t * 15 + i) * 0.2; });
     });
     // Confessionale in legno con grata
@@ -1135,10 +1340,9 @@ const BUILDERS = {
     I.npc({ shirt: 0x111111, pants: 0x111111, sleeves: 'long', sex: 'm', hair: 0x9a9a9a }, -1.6, -d / 2 + 3.4, 0.3);
     I.sign(variant === 'cathedral' ? 'CATTEDRALE DI SANTA MARIA' : variant === 'chapel' ? 'CHIESA DI SAN FRANCESCO' : 'CHIESA DI SAN MICHELE', '#ffd98a', 4.4, 0.5, 0, h - 0.6, d / 2 - 0.02, Math.PI, 'rgba(30,22,12,0.95)');
     I.calendar(w / 2 - 0.03, 1.7, d / 2 - 2.2, -Math.PI / 2);
-    I.interact(0, -d / 2 + 4.6, 'pregare davanti all\'altare', 'pray', {}, 2.0);
+    I.interact(0, -d / 2 + 4.6, 'inginocchiarti e pregare davanti all\'altare', 'pray', { x: 0, z: -d / 2 + 4.6 }, 2.0);
     I.interact(0, -d / 2 + 6.4, 'contemplare la luce (Paradiso)', 'paradise', {}, 1.3);
-    I.interact(cxv, -d / 2 + 5.2, 'accendere una candela (offerta € 2)', 'candle', {}, 1.5);
-    I.interact(0, -d / 2 + 9.5, 'partecipare alla Santa Messa', 'mass', {}, 1.6);
+    I.interact(cxv, -d / 2 + 5.3, 'accendere una candela votiva', 'candle', {}, 1.5);
     I.interact(cfx + 1.6, cfz, 'confessarti', 'confess', {}, 1.5);
     I.interact(w / 2 - 1.1, d / 2 - 2.2, 'guardare il calendario liturgico', 'calendar', {}, 1.4);
     return { w, d, h };
@@ -1165,6 +1369,105 @@ const BUILDERS = {
     const variant = variants[hsh % variants.length];
     if (variant === 'classic') return BUILDERS.home(I, { ...ctx, familyId: villa ? 'rich' : 'middle' });
     return buildHouseVariant(I, variant, hsh);
+  },
+
+  /* ---------------- SALONE DI BELLEZZA / BARBIERE ---------------- */
+  barber(I) {
+    const rng = I.rng;
+    const w = 11, d = 9, h = 3.2;
+    const floorTex = TEX.tiles((x, y) => ((x + y) % 2 ? 0xf2f0ea : 0x1d1d20), '#555', rng, 10, 3, 3);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, roughness: 0.25 }), wallMat: std(0xffffff, { map: TEX.plaster(0xf1e3e8, rng, 3, 1), roughness: 0.9 }), trim: 0x2b2b2e });
+    I.ambient(0xfff4f6, 0x6b5a60, 0.5);
+    for (const x of [-2.5, 2.5]) I.light(x, h - 0.2, -1.5, 0xfff6ee, 12, { fixture: 'panel', shadow: x < 0 });
+    I.sign('BARBIERE · SALONE DI BELLEZZA', '#ff9ad5', 4.6, 0.45, 0, h - 0.45, -d / 2 + 0.03, 0, 'rgba(30,10,24,0.95)');
+    // Palo del barbiere (strisce che ruotano)
+    const pole = canvasTex(64, (g, s) => {
+      for (let y = -s; y < s * 2; y += 16) { g.fillStyle = (y / 16) % 2 ? '#c8102e' : '#ffffff'; g.beginPath(); g.moveTo(0, y); g.lineTo(s, y + s / 2); g.lineTo(s, y + s / 2 + 16); g.lineTo(0, y + 16); g.closePath(); g.fill(); }
+    }, 1, 2);
+    const poleMesh = I.mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.1, 16), new THREE.MeshStandardMaterial({ map: pole, roughness: 0.3 }), w / 2 - 0.4, 1.7, d / 2 - 1.2);
+    I.animators.push((t) => { pole.offset.y = (t * 0.4) % 1; });
+    void poleMesh;
+    // Due postazioni: specchio, mensola, poltrona girevole
+    const mirrorMat = new THREE.MeshStandardMaterial({ color: 0xbfd2dd, metalness: 0.95, roughness: 0.04 });
+    I.seats = [];
+    for (const [i, x] of [[0, -2.2], [1, 2.2]]) {
+      I.box(1.6, 1.2, 0.04, mirrorMat, x, 1.6, -d / 2 + 0.05);
+      I.box(1.8, 0.06, 0.4, std(0x2b2b2e, { metalness: 0.5 }), x, 0.95, -d / 2 + 0.22, { solid: true });
+      for (let k = 0; k < 4; k++) I.box(0.07, 0.18, 0.07, std([0xff9ad5, 0x7fd0ff, 0xffd27a, 0x8fe08a][k]), x - 0.6 + k * 0.4, 1.07, -d / 2 + 0.22);
+      const cz = -d / 2 + 1.5;
+      I.box(0.12, 0.45, 0.12, std(0x9aa0a6, { metalness: 0.9, roughness: 0.2 }), x, 0.22, cz);
+      I.box(0.7, 0.12, 0.65, std(0x8a1f2f, { roughness: 0.5 }), x, 0.5, cz);
+      I.box(0.7, 0.75, 0.1, std(0x8a1f2f, { roughness: 0.5 }), x, 0.92, cz + 0.32);
+      I.addBody(0.7, 1.0, 0.75, x, 0.5, cz);
+      const seat = { index: i, seat: I.toWorld(x, 0.56, cz), facing: Math.PI };
+      I.seats.push(seat);
+      I.interact(x, cz + 1.0, 'sederti sulla poltrona (taglio, colore, barba)', 'barber', { seat }, 1.2);
+    }
+    // Barbiere e cliente in attesa sul divanetto
+    I.npc({ shirt: 0x1d1d20, pants: 0x1d1d20, sex: 'm', beard: true, hairStyle: 'buzz', sleeves: 'short' }, -0.9, -d / 2 + 2.3, Math.PI * 0.85);
+    I.sofa(w / 2 - 1.2, 1.6, -Math.PI / 2, 0x2b2b2e, 2.0);
+    I.npcSit({ sex: 'f' }, w / 2 - 1.2, 1.6, -Math.PI / 2, 0.5);
+    I.plant(-w / 2 + 0.6, d / 2 - 0.7, 1.0);
+    return { w, d, h };
+  },
+
+  /* ---------------- NEGOZIO DI CASCHI ---------------- */
+  helmets(I) {
+    const rng = I.rng;
+    const w = 12, d = 10, h = 3.4;
+    const floorTex = TEX.concrete(0x5a5d62, rng, 3, 3, 4);
+    const wallTex = TEX.plaster(0x2c2f35, rng, 3, 1);
+    I.room({ w, d, h, floorMat: std(0xffffff, { map: floorTex, roughness: 0.35, metalness: 0.05 }), wallMat: std(0xffffff, { map: wallTex, roughness: 0.85 }), ceilMat: std(0x1c1d20), trim: 0xffd24a });
+    I.ambient(0xfff4e0, 0x2a2c30, 0.45);
+    for (const x of [-3.5, 0, 3.5]) I.light(x, h - 0.25, -1.2, 0xfff1dc, 10, { fixture: 'panel', shadow: x === 0 });
+    I.sign('CASCHI · MOTO STORE', '#ffd24a', 4.4, 0.45, 0, h - 0.42, -d / 2 + 0.03, 0, 'rgba(20,16,6,0.95)');
+    // Pareti espositive: mensole illuminate con i caschi in vendita (tutti i modelli, più colori)
+    const shelfMat = std(0x1a1b1e, { metalness: 0.4, roughness: 0.4 });
+    const ledMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff0cc, emissiveIntensity: 1.6 });
+    const types = Object.values(HELMETS);
+    const palette = [[0xc53030, 0x1b1d22], [0x1b1d22, 0xf2c200], [0xe8e4da, 0x2b6cb0], [0x2f855a, 0xf2efe6], [0x6b46c1, 0xffffff]];
+    const place = (x, y, z, rotY, k) => {
+      const t = types[k % types.length];
+      const col = k < types.length ? [t.color, t.accent] : palette[k % palette.length];
+      const helm = makeHelmet(t.type, col[0], col[1]);
+      helm.scale.setScalar(1.6);
+      helm.position.set(x, y - 0.12 * 1.6 + 0.03, z);
+      helm.rotation.y = rotY;
+      I.group.add(helm);
+    };
+    // Parete di fondo: 3 mensole × 5 caschi
+    for (let row = 0; row < 3; row++) {
+      const y = 0.9 + row * 0.62;
+      I.box(7.2, 0.04, 0.42, shelfMat, 0, y, -d / 2 + 0.24);
+      I.box(7.2, 0.015, 0.02, ledMat, 0, y - 0.03, -d / 2 + 0.44);
+      for (let i = 0; i < 5; i++) place(-2.9 + i * 1.45, y + 0.02, -d / 2 + 0.26, 0.25 - i * 0.12, row * 5 + i);
+    }
+    I.addBody(7.2, 2.4, 0.5, 0, 1.2, -d / 2 + 0.25);
+    // Pareti laterali: due mensole per lato
+    for (const sx of [-1, 1]) {
+      for (let row = 0; row < 2; row++) {
+        const y = 1.1 + row * 0.7;
+        I.box(0.42, 0.04, 4.2, shelfMat, sx * (w / 2 - 0.24), y, -0.6);
+        for (let i = 0; i < 3; i++) place(sx * (w / 2 - 0.26), y + 0.02, -2.0 + i * 1.4, -sx * Math.PI / 2, 3 + row * 3 + i + (sx > 0 ? 7 : 0));
+      }
+      I.addBody(0.5, 2.0, 4.2, sx * (w / 2 - 0.25), 1.0, -0.6);
+    }
+    // Moto in esposizione su pedana rotante (la Ninja H2R)
+    const deck = I.mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.12, 40), std(0x111214, { metalness: 0.6, roughness: 0.25 }), 2.6, 0.06, 1.4);
+    deck.castShadow = false;
+    I.addBody(3.0, 1.2, 3.0, 2.6, 0.6, 1.4);
+    const bike = buildVehicleMesh('moto', 0x1b1d20, 'hyper').group;
+    bike.position.set(2.6, 0.12, 1.4);
+    I.group.add(bike);
+    I.animators.push((t) => { bike.rotation.y = t * 0.35; });
+    // Bancone e commesso
+    I.box(3.2, 1.0, 0.7, std(0x23252a, { roughness: 0.4 }), -2.6, 0.5, 0.2, { solid: true, shadow: true });
+    I.box(3.3, 0.05, 0.8, std(0xffd24a, { roughness: 0.35 }), -2.6, 1.02, 0.2);
+    place(-3.6, 1.05, 0.2, 0.6, 0);
+    I.npc({ shirt: 0xffd24a, pants: 0x1d1d20, sex: rng() < 0.5 ? 'f' : 'm', sleeves: 'short' }, -2.6, -0.5, 0);
+    I.interact(-2.6, 1.3, 'parlare con il commesso (caschi)', 'shop', { shop: 'helmets' }, 1.8);
+    I.plant(w / 2 - 0.7, d / 2 - 0.8, 1.0);
+    return { w, d, h };
   },
 
   /* ---------------- GARAGE DI CASA ---------------- */
@@ -1251,6 +1554,8 @@ const BUILDERS = {
     const ring = I.mesh(new THREE.RingGeometry(0.45, 0.6, 40), ringMat, 0, 0.03, d / 2 - 0.9);
     ring.rotation.x = -Math.PI / 2;
     I.animators.push((t) => { ringMat.opacity = 0.35 + Math.sin(t * 3) * 0.2; });
+    // Porta interna verso casa (parete sinistra, vicino alla serranda)
+    I.innerDoor(-w / 2, d / 2 - 2.2, -1, 'entrare in casa (porta interna)', 'tohouse', 'CASA');
     return { w, d, h };
   },
 
@@ -1457,6 +1762,16 @@ function buildHouseVariant(I, variant, hsh) {
     I.plant(-w / 2 + 0.6, d / 2 - 0.6, 1.5);
     I.plant(w / 2 - 0.6, -d / 2 + 3.2, 1.3);
   }
+  // Decorazioni comuni: quadri sulla parete d'ingresso, orologio, tappeto e lampada a sospensione decorativa
+  for (const [x, c] of [[-w / 2 + 1.8, 0x2b4a8a], [w / 2 - 1.8, 0x8a2b2b]]) {
+    I.box(1.0, 0.75, 0.04, std(0x2b2522, { roughness: 0.4 }), x, 1.75, d / 2 - 0.03);
+    I.mesh(new THREE.PlaneGeometry(0.88, 0.63), std(c, { roughness: 0.7 }), x, 1.75, d / 2 - 0.055, Math.PI);
+    I.mesh(new THREE.CircleGeometry(0.18, 20), std(0xe9c46a, { roughness: 0.6 }), x + 0.15, 1.8, d / 2 - 0.06, Math.PI);
+  }
+  const entryRug = I.mesh(new THREE.PlaneGeometry(1.6, 1.0), std(pick([0x7a3b2b, 0x2f4a6b, 0x4a5d3a], 3), { roughness: 1 }), 0, 0.012, d / 2 - 1.2);
+  entryRug.rotation.x = -Math.PI / 2;
+  I.mesh(new THREE.CircleGeometry(0.2, 28), std(0xf4f1ea, { roughness: 0.5 }), 0, h - 0.7, -d / 2 + 0.02);
+  I.mesh(new THREE.TorusGeometry(0.2, 0.015, 6, 28), std(0x222222), 0, h - 0.7, -d / 2 + 0.03);
   // Calendario e punto [E] in tutte le varianti
   I.calendar(-w / 2 + 0.03, 1.65, -d / 2 + 1.6, Math.PI / 2);
   I.interact(-w / 2 + 1.0, -d / 2 + 1.6, 'guardare il calendario', 'calendar', {}, 1.2);

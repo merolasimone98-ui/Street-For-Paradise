@@ -1,7 +1,7 @@
 // Servizio al tavolo: cameriere NPC, menù, attesa di 10 s, pasto, scontrino, polizia se non paghi.
 import * as THREE from 'three';
 import { Npc } from './npcs.js';
-import { MENUS } from './items.js';
+import { MENUS, PENALTIES } from './items.js';
 import { formatMoney } from './birthdata.js';
 import { disposeObject3D } from './ui.js';
 import { audio } from './audio.js';
@@ -177,7 +177,7 @@ export class RestaurantService {
 
   onCannotPay(total) {
     this.state = 'police';
-    this.game.state.changeAura(-6, 'Hai consumato senza poter pagare (7° comandamento)');
+    this.game.state.changeAura(-PENALTIES.theftAura, 'Hai consumato senza poter pagare (7° comandamento)');
     this.game.toast(`Non hai ${formatMoney(total)} in contanti! Il cameriere chiama la polizia…`, 4000);
     this.waiter.walkTo(this.routeToKitchen(), 1.8);
     audio.siren(9);

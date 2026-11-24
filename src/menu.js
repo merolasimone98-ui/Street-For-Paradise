@@ -4,7 +4,7 @@ import { getCity, formatMoney } from './birthdata.js';
 import { settingsFormHtml, bindSettingsForm, loadSettings, setSetting, onSettingsChange } from './settings.js';
 import { audio, bindUiSounds } from './audio.js';
 import { $, confirmDialog, isModalOpen } from './ui.js';
-import { LANGUAGES, getLanguage } from './i18n.js';
+import { LANGUAGES, getLanguage, getLocale } from './i18n.js';
 
 export class Menu {
   /**
@@ -24,6 +24,8 @@ export class Menu {
     this.settingsPanel = $('menu-settings');
     this.creditsPanel = $('menu-credits');
     this.btnCredits = $('btn-credits');
+    this.shopPanel = $('menu-shop');
+    this.btnShop = $('btn-shop');
     this.btnLang = $('btn-lang');
     this.gender = $('gender-screen');
 
@@ -39,7 +41,10 @@ export class Menu {
     this.btnSettings.addEventListener('click', () => this.openSettings());
     this.btnCredits.addEventListener('click', () => this.openCredits());
     this.creditsPanel.addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === this.creditsPanel) this.closeCredits(); });
-    // Lingua: il pulsante in alto a destra passa da Italiano a Inglese e viceversa (tutto il gioco si traduce subito)
+    bindUiSounds(this.shopPanel);
+    this.btnShop.addEventListener('click', () => this.shopPanel.classList.remove('hidden'));
+    this.shopPanel.addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target === this.shopPanel) this.closeShop(); });
+    // Lingua: il pulsante in alto a destra scorre Italiano → English → Deutsch → Русский (tutto il gioco si traduce subito)
     this.btnLang.addEventListener('click', () => {
       const codes = Object.keys(LANGUAGES);
       const next = codes[(codes.indexOf(getLanguage()) + 1) % codes.length];
@@ -74,6 +79,10 @@ export class Menu {
     this.creditsPanel.classList.add('hidden');
   }
 
+  closeShop() {
+    this.shopPanel.classList.add('hidden');
+  }
+
   onKey(e) {
     if (!this.active || this.busy || isModalOpen()) return;
     if (!this.settingsPanel.classList.contains('hidden')) {
@@ -82,6 +91,10 @@ export class Menu {
     }
     if (!this.creditsPanel.classList.contains('hidden')) {
       if (e.code === 'Escape') this.closeCredits();
+      return;
+    }
+    if (!this.shopPanel.classList.contains('hidden')) {
+      if (e.code === 'Escape') this.closeShop();
       return;
     }
     if (!this.gender.classList.contains('hidden')) {
@@ -106,7 +119,7 @@ export class Menu {
       const c = save.character;
       const city = getCity(c.cityId);
       const date = new Date(save.savedAt || Date.now());
-      const loc = getLanguage() === 'en' ? 'en-GB' : 'it-IT';
+      const loc = getLocale();
       const when = date.toLocaleDateString(loc, { day: '2-digit', month: 'short' }) + ' ' +
         date.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
       this.continueSub.textContent = `${c.name} ${c.surname} · ${save.age} anni · ${city.city} · ${formatMoney(save.money)} · ${when}`;
@@ -207,6 +220,7 @@ export class Menu {
     this.root.classList.remove('visible');
     this.closeSettings();
     this.closeCredits();
+    this.closeShop();
     if (document.activeElement && this.root.contains(document.activeElement)) document.activeElement.blur();
     return new Promise((resolve) => {
       setTimeout(() => {

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { GROUPS } from './playerstate.js';
-import { VEHICLE_MODELS } from './items.js';
+import { VEHICLE_MODELS, ENGINE_STAGES } from './items.js';
 import { disposeObject3D } from './ui.js';
 import { models } from './models.js';
 
@@ -95,6 +95,59 @@ function twoWheel(r, tubeR) {
   }
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   return g;
+}
+
+/**
+ * Dettagli piccoli raggruppati per materiale: tante parti (passaruota, minigonne, montanti, frecce…)
+ * diventano UNA mesh per materiale, così i dettagli non moltiplicano le draw call dei veicoli parcheggiati.
+ */
+class DetailBatch {
+  constructor() {
+    this.buckets = new Map();
+    this._m = new THREE.Matrix4();
+    this._q = new THREE.Quaternion();
+    this._e = new THREE.Euler();
+    this._s = new THREE.Vector3(1, 1, 1);
+    this._p = new THREE.Vector3();
+  }
+
+  add(material, geo, x, y, z, rx = 0, ry = 0, rz = 0) {
+    this._e.set(rx, ry, rz);
+    this._q.setFromEuler(this._e);
+    this._p.set(x, y, z);
+    this._m.compose(this._p, this._q, this._s);
+    geo.applyMatrix4(this._m);
+    if (!this.buckets.has(material)) this.buckets.set(material, []);
+    this.buckets.get(material).push(geo);
+  }
+
+  /** Unisce le geometrie di ogni materiale e aggiunge le mesh risultanti al gruppo. */
+  build(group) {
+    for (const [material, geos] of this.buckets) {
+      let vCount = 0, iCount = 0;
+      for (const g of geos) { vCount += g.attributes.position.count; iCount += g.index ? g.index.count : g.attributes.position.count; }
+      const pos = new Float32Array(vCount * 3), nor = new Float32Array(vCount * 3), idx = new Uint32Array(iCount);
+      let vo = 0, io = 0;
+      for (const g of geos) {
+        const p = g.attributes.position, n = g.attributes.normal;
+        pos.set(p.array.subarray(0, p.count * 3), vo * 3);
+        nor.set(n.array.subarray(0, n.count * 3), vo * 3);
+        if (g.index) { for (let k = 0; k < g.index.count; k++) idx[io + k] = g.index.array[k] + vo; io += g.index.count; }
+        else { for (let k = 0; k < p.count; k++) idx[io + k] = vo + k; io += p.count; }
+        vo += p.count;
+        g.dispose();
+      }
+      const out = new THREE.BufferGeometry();
+      out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+      out.setIndex(new THREE.BufferAttribute(idx, 1));
+      out.computeBoundingSphere();
+      const mesh = new THREE.Mesh(out, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    }
+  }
 }
 
 /** Testo della radio sul display del cruscotto. */
@@ -272,6 +325,89 @@ function buildVespa(group, s, paint, black, chrome, headMat, tailMat, wheels, st
   const tl = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.03), tailMat);
   tl.position.set(0, 0.62, -0.83);
   group.add(tl);
+  // Specchietti tondi cromati, cresta sul parafango, targa e marmitta
+  for (const sx of [-1, 1]) {
+    tube(col, new THREE.Vector3(sx * 0.22, 0.8, -0.17), new THREE.Vector3(sx * 0.27, 1.0, -0.2), 0.006, chrome);
+    const mirror = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.015, 16), chrome);
+    mirror.rotation.x = Math.PI / 2;
+    mirror.position.set(sx * 0.28, 1.02, -0.2);
+    col.add(mirror);
+  }
+  const crest = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.2), chrome);
+  crest.position.set(0, 0.17, 0.02);
+  fHolder.add(crest);
+  const D = new DetailBatch();
+  D.add(std(0xf2f2ee), new THREE.BoxGeometry(0.15, 0.1, 0.01), 0, 0.52, -0.85, -0.3, 0, 0);
+  D.add(chrome, new THREE.CylinderGeometry(0.038, 0.045, 0.36, 12), -0.2, 0.3, -0.42, Math.PI / 2 - 0.15, 0, 0);
+  D.add(chrome, new THREE.BoxGeometry(0.34, 0.015, 0.015), 0, 0.33, 0.35);
+  D.build(group);
+}
+
+/**
+ * Moto carenata: sportiva 1000 ("sport") oppure hypersport con compressore e alette ("hyper", Ninja H2R):
+ * cupolino con doppio faro, plexiglass fumé, fianchetti, codone rialzato, telaio a traliccio verde (hyper),
+ * forcella a steli dorati, semimanubri, dischi freno, forcellone e scarico laterale.
+ */
+function buildSportBike(group, s, paint, black, chrome, headMat, tailMat, wheels, steerNodes, hyper) {
+  const r = s.wheelR;
+  const fw = twoWheel(r, 0.07);
+  const rw = twoWheel(r, hyper ? 0.095 : 0.085);
+  const fHolder = new THREE.Group();
+  fHolder.position.set(0, r, s.wheelBase / 2);
+  fHolder.add(fw);
+  rw.position.set(0, r, -s.wheelBase / 2);
+  group.add(fHolder, rw);
+  wheels.push({ node: fw, front: true }, { node: rw, front: false });
+  steerNodes.push(fHolder);
+  const smoke = new THREE.MeshPhysicalMaterial({ color: 0x10161d, roughness: 0.03, transparent: true, opacity: 0.55, clearcoat: 1 });
+  const frameMat = std(hyper ? 0x3fbf3f : 0x2b2d31, { metalness: 0.6, roughness: 0.35 });
+  const carbon = std(0x18191c, { metalness: 0.3, roughness: 0.3 });
+  const gold = std(0xd6a73a, { metalness: 0.9, roughness: 0.25 });
+  const parts = [];
+  const add = (m, x, y, z, rx = 0, ry = 0, rz = 0) => { m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parts.push(m); return m; };
+  // Cupolino e plexiglass
+  const nose = add(new THREE.Mesh(new THREE.SphereGeometry(0.22, 22, 14), paint), 0, 0.8, 0.5);
+  nose.scale.set(0.72, 0.78, 1.45);
+  const screen = add(new THREE.Mesh(new THREE.SphereGeometry(0.2, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.5), smoke), 0, 0.95, 0.42, -1.0, 0, 0);
+  screen.scale.set(0.68, 0.6, 1.1);
+  // Fianchetti, pancia, serbatoio, sella, codone
+  for (const sx of [-1, 1]) {
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.4, 0.78), paint), sx * 0.19, 0.62, 0.18, 0, sx * 0.08, sx * -0.1);
+    if (hyper) add(new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.012, 0.1), carbon), sx * 0.25, 0.86, 0.5, 0, 0, sx * 0.25); // alette
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.05, 0.02), black), sx * 0.24, 0.96, 0.43); // specchietti
+  }
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.62), carbon), 0, 0.36, 0.05);
+  const tank = add(new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.26, 6, 12), paint), 0, 0.9, 0.12, Math.PI / 2 - 0.25, 0, 0);
+  tank.scale.set(1, 1, 0.85);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 0.36), black), 0, 0.87, -0.28, 0.1, 0, 0);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.13, 0.55), paint), 0, 0.96, -0.62, -0.32, 0, 0);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.32, 0.42), std(0x2a2c30, { metalness: 0.7, roughness: 0.35 })), 0, 0.5, 0.05);
+  // Fari: due proiettori nel cupolino; fanale e targa
+  for (const sx of [-1, 1]) add(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.035, 0.03), headMat), sx * 0.07, 0.79, 0.8, 0.25, 0, 0);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.035, 0.03), tailMat), 0, 1.0, -0.9, -0.3, 0, 0);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.11, 0.01), std(0xf2f2ee)), 0, 0.72, -0.98, -0.6, 0, 0);
+  // Scarico: laterale e massiccio sulla H2R, corto sotto il codone sulla 1000
+  if (hyper) add(new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.55, 16), chrome), 0.2, 0.52, -0.42, Math.PI / 2 - 0.35, 0, 0);
+  else add(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.35, 14), black), 0.16, 0.42, -0.5, Math.PI / 2 - 0.15, 0, 0);
+  parts.forEach((m) => { m.castShadow = true; group.add(m); });
+  // Telaio a traliccio (verde Kawasaki sulla H2R) e forcellone
+  for (const sx of [-1, 1]) {
+    tube(group, new THREE.Vector3(sx * 0.15, 0.82, 0.42), new THREE.Vector3(sx * 0.16, 0.5, -0.18), 0.018, frameMat);
+    tube(group, new THREE.Vector3(sx * 0.15, 0.82, 0.42), new THREE.Vector3(sx * 0.17, 0.82, -0.15), 0.016, frameMat);
+    tube(group, new THREE.Vector3(sx * 0.17, 0.82, -0.15), new THREE.Vector3(sx * 0.16, 0.5, -0.18), 0.014, frameMat);
+    tube(group, new THREE.Vector3(sx * 0.12, 0.45, -0.12), new THREE.Vector3(sx * 0.1, r, -s.wheelBase / 2), 0.026, hyper ? carbon : black);
+  }
+  // Sterzo: steli della forcella dorati, semimanubri e dischi freno (girano con il manubrio)
+  const fork = new THREE.Group();
+  fHolder.add(fork);
+  for (const sx of [-1, 1]) {
+    tube(fork, new THREE.Vector3(sx * 0.08, 0, 0), new THREE.Vector3(sx * 0.08, 0.55, -0.2), 0.024, gold);
+    tube(fork, new THREE.Vector3(sx * 0.08, 0.53, -0.21), new THREE.Vector3(sx * 0.24, 0.5, -0.3), 0.014, black);
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.008, 26), chrome);
+    disc.rotation.z = Math.PI / 2;
+    disc.position.x = sx * 0.075;
+    fHolder.add(disc);
+  }
 }
 
 /**
@@ -358,6 +494,43 @@ export function buildVehicleMesh(kind, color, style = null) {
       wheels.push({ node: w, front: isFront });
       if (isFront) steerNodes.push(holder);
     }
+    // ---- Dettagli carrozzeria (uniti per materiale) ----
+    const D = new DetailBatch();
+    const plastic = std(0x111214, { roughness: 0.75 });
+    const amber = new THREE.MeshStandardMaterial({ color: 0xffa21f, emissive: 0xff7a00, emissiveIntensity: 0.25, roughness: 0.2 });
+    const r = s.wheelR;
+    const midZ = (gFront + gRear) / 2;
+    const doors4 = kind === 'car' || kind === 'suv';
+    for (const sx of [-1, 1]) {
+      // Passaruota in plastica sopra ogni ruota
+      for (const sz of [wb, -wb]) D.add(plastic, new THREE.TorusGeometry(r + 0.075, 0.045, 6, 18, Math.PI), sx * (W / 2 - 0.02), r, sz, 0, Math.PI / 2, 0);
+      // Minigonne tra i passaruota
+      D.add(plastic, new THREE.BoxGeometry(0.06, 0.1, Math.max(0.4, 2 * wb - 2 * (r + 0.16))), sx * (W / 2 - 0.005), 0.3, 0);
+      // Montante centrale nero tra i finestrini
+      D.add(plastic, new THREE.BoxGeometry(0.035, Math.max(0.2, roofY - 0.94 * k - 0.06), 0.11), sx * (W / 2 - 0.125), (0.94 * k + roofY) / 2, midZ + (kind === 'suv' ? -0.2 : 0.05));
+      // Modanatura cromata sotto i finestrini
+      D.add(chrome, new THREE.BoxGeometry(0.02, 0.022, Math.max(0.5, gFront - gRear)), sx * (W / 2 + 0.006), 0.93 * k, midZ);
+      // Linee delle portiere
+      const doorLines = doors4 ? [gFront - 0.05, midZ + 0.05, gRear + 0.2] : [gFront - 0.05, gRear + 0.35];
+      for (const z of doorLines) D.add(plastic, new THREE.BoxGeometry(0.012, 0.52 * k, 0.014), sx * (W / 2 + 0.004), 0.62 * k, z);
+      // Frecce anteriori e ripetitori laterali
+      D.add(amber, new THREE.BoxGeometry(0.09, 0.05, 0.03), sx * (W / 2 - 0.09), 0.6 * k, front + 0.075);
+      D.add(amber, new THREE.BoxGeometry(0.02, 0.03, 0.08), sx * (W / 2 + 0.008), 0.76 * k, front - 0.62);
+      // Fendinebbia nel paraurti (si accendono con i fari)
+      D.add(headMat, new THREE.CylinderGeometry(0.045, 0.045, 0.03, 14), sx * (W / 2 - 0.32), 0.33, front + 0.105, Math.PI / 2, 0, 0);
+      // Spazzole tergicristallo
+      D.add(plastic, new THREE.BoxGeometry(0.48, 0.014, 0.02), sx * 0.27, 0.955 * k, gFront - 0.06, 0, 0, sx * 0.08);
+    }
+    // Scarico (doppio sulle sportive), antenna, estrattore posteriore e barre sul tetto del SUV
+    const pipes = kind === 'sport' ? [-0.35, -0.22, 0.22, 0.35] : [W / 2 - 0.4];
+    for (const x of pipes) D.add(chrome, new THREE.CylinderGeometry(0.042, 0.048, 0.16, 12), x, 0.26, rear - 0.1, Math.PI / 2, 0, 0);
+    D.add(plastic, new THREE.CylinderGeometry(0.006, 0.01, 0.32, 6), 0, roofY + 0.15, gRear + 0.45, -0.35, 0, 0);
+    if (kind === 'sport') D.add(plastic, new THREE.BoxGeometry(W * 0.8, 0.06, 0.2), 0, 0.22, rear - 0.05, -0.25, 0, 0);
+    if (kind === 'suv') for (const sx of [-1, 1]) D.add(chrome, new THREE.BoxGeometry(0.04, 0.05, roofLen * 0.95), sx * (W / 2 - 0.25), roofY + 0.04, roof.position.z);
+    if (kind === 'sport') D.add(paint, new THREE.BoxGeometry(W * 0.75, 0.03, 0.22), 0, 0.97 * k + 0.08, rear + 0.12, 0.12, 0, 0); // spoiler
+    D.build(group);
+  } else if (kind === 'moto' && (style === 'sport' || style === 'hyper')) {
+    buildSportBike(group, s, paint, black, chrome, headMat, tailMat, wheels, steerNodes, style === 'hyper');
   } else if (kind === 'moto') {
     const r = s.wheelR;
     const fw = twoWheel(r, 0.065);
@@ -398,6 +571,26 @@ export function buildVehicleMesh(kind, color, style = null) {
     const tl = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.05, 0.03), tailMat);
     tl.position.set(0, 0.84, -0.92);
     group.add(tl);
+    // Dettagli: radiatore, pedane, catena, forcellone, targa, specchietti e dischi freno
+    const D = new DetailBatch();
+    D.add(std(0x1c1d20, { metalness: 0.5, roughness: 0.45 }), new THREE.BoxGeometry(0.34, 0.26, 0.05), 0, 0.62, 0.36, -0.2, 0, 0);
+    for (const sx of [-1, 1]) {
+      D.add(black, new THREE.BoxGeometry(0.12, 0.025, 0.04), sx * 0.2, 0.36, -0.2);
+      D.add(black, new THREE.BoxGeometry(0.03, 0.05, 0.75), sx * 0.11, r + 0.02, -0.36, 0.08, 0, 0);
+    }
+    D.add(std(0x2b2b2e, { metalness: 0.7, roughness: 0.4 }), new THREE.BoxGeometry(0.02, 0.05, 0.8), 0.15, r + 0.04, -0.34);
+    D.add(std(0xf2f2ee), new THREE.BoxGeometry(0.18, 0.12, 0.01), 0, 0.7, -0.96, -0.5, 0, 0);
+    D.build(group);
+    for (const sx of [-1, 1]) {
+      tube(fork, new THREE.Vector3(sx * 0.3, 0.73, -0.27), new THREE.Vector3(sx * 0.33, 0.9, -0.3), 0.007, black);
+      const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.02), black);
+      mirror.position.set(sx * 0.34, 0.92, -0.31);
+      fork.add(mirror);
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.008, 24), chrome);
+      disc.rotation.z = Math.PI / 2;
+      disc.position.x = sx * 0.075;
+      fHolder.add(disc);
+    }
   } else if (kind === 'scooter' && style === 'vespa') {
     buildVespa(group, s, paint, black, chrome, headMat, tailMat, wheels, steerNodes);
   } else if (kind === 'scooter') {
@@ -433,6 +626,18 @@ export function buildVehicleMesh(kind, color, style = null) {
     const tl = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.05, 0.03), tailMat);
     tl.position.set(0, 0.6, -0.86);
     group.add(tl);
+    // Specchietti sul manubrio, marmitta, targa e bauletto sotto sella
+    for (const sx of [-1, 1]) {
+      tube(col, new THREE.Vector3(sx * 0.26, 0.8, -0.14), new THREE.Vector3(sx * 0.3, 0.98, -0.16), 0.007, black);
+      const mirror = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.055, 0.02), black);
+      mirror.position.set(sx * 0.31, 1.0, -0.16);
+      col.add(mirror);
+    }
+    const D = new DetailBatch();
+    D.add(chrome, new THREE.CylinderGeometry(0.04, 0.05, 0.42, 12), 0.17, 0.3, -0.5, Math.PI / 2 - 0.1, 0, 0);
+    D.add(std(0xf2f2ee), new THREE.BoxGeometry(0.16, 0.1, 0.01), 0, 0.5, -0.9, -0.4, 0, 0);
+    D.add(black, new THREE.BoxGeometry(0.3, 0.025, 0.5), 0, 0.71, -0.32);
+    D.build(group);
   } else {
     // bicicletta
     const r = s.wheelR;
@@ -486,6 +691,17 @@ export function buildVehicleMesh(kind, color, style = null) {
     const rear = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.04, 0.02), tailMat);
     rear.position.set(0, 0.8, -0.38);
     group.add(rear);
+    // Parafanghi, catena e campanello
+    const D = new DetailBatch();
+    D.add(black, new THREE.TorusGeometry(r + 0.04, 0.012, 4, 16, Math.PI * 0.55), 0, r, -s.wheelBase / 2, 0, Math.PI / 2, Math.PI * 0.25);
+    D.add(std(0x3a3c40, { metalness: 0.7, roughness: 0.4 }), new THREE.BoxGeometry(0.012, 0.03, s.wheelBase / 2), 0.05, r, -s.wheelBase / 4);
+    D.build(group);
+    const fender = new THREE.Mesh(new THREE.TorusGeometry(r + 0.04, 0.012, 4, 16, Math.PI * 0.5), black);
+    fender.rotation.set(0, Math.PI / 2, Math.PI * 0.3);
+    fHolder.add(fender);
+    const bell = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 8), chrome);
+    bell.position.set(-0.2, 0.68, -0.15);
+    fork.add(bell);
   }
   group.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   if (cockpit) group.add(cockpit.group);
@@ -674,9 +890,10 @@ export class Vehicle {
   applyTune() {
     const t = this.tune;
     const base = this.baseSpec;
-    const eng = Math.max(0, Math.min(2, t.engine || 0));
-    this.spec.maxSpeed = base.maxSpeed * [1, 1.08, 1.17][eng];
-    this.spec.accel = base.accel * [1, 1.14, 1.3][eng];
+    const eng = Math.max(0, Math.min(ENGINE_STAGES.length, t.engine || 0));
+    const stage = eng ? ENGINE_STAGES[eng - 1] : { speed: 1, accel: 1 };
+    this.spec.maxSpeed = base.maxSpeed * stage.speed;
+    this.spec.accel = base.accel * stage.accel;
     this.spec.brake = base.brake * (t.brakes ? 1.22 : 1);
     this.spec.steer = base.steer * (t.lowered ? 1.08 : 1);
     this.mesh.traverse((o) => {

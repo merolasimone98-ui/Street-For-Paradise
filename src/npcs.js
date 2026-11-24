@@ -4,12 +4,11 @@ import * as CANNON from 'cannon-es';
 import { makePerson, HumanAnimator, randomLook } from './characters.js';
 import { GROUPS } from './playerstate.js';
 import { disposeObject3D } from './ui.js';
-import { BLOCK, GRID, CELL, HALF, RINGS, districtForRow } from './world.js';
+import { BLOCK, GRID, CELL, HALF, RINGS, districtForRow, SIDEWALK_H } from './world.js';
 import { audio } from './audio.js';
+import { localFirstName, localNickname } from './names.js';
 
-const SIDEWALK_Y = 0.2;
-const NAMES_M = ['Marco', 'Luca', 'Ahmed', 'Carlos', 'Kenji', 'Oleg', 'David', 'Samuel', 'Paolo', 'Tom'];
-const NAMES_F = ['Giulia', 'Sara', 'Aisha', 'Maria', 'Yuki', 'Elena', 'Fatima', 'Laura', 'Chiara', 'Ana'];
+const SIDEWALK_Y = SIDEWALK_H;
 
 const blockCenter = (i) => -HALF + i * CELL + CELL / 2;
 
@@ -26,7 +25,8 @@ export class Npc {
     this.scene = scene;
     this.physics = physics;
     this.look = look;
-    this.name = name || (look.sex === 'f' ? NAMES_F : NAMES_M)[Math.floor(Math.random() * 10)];
+    // Nome coerente con la nazione della città in cui si gioca (names.js)
+    this.name = name || localFirstName(look.sex);
     this.mesh = makePerson(look);
     this.mesh.userData.npc = this; // per il raycast dei proiettili
     this.animator = new HumanAnimator(this.mesh);
@@ -218,7 +218,7 @@ export class NpcManager {
     spots.forEach((s, i) => {
       const id = `h${i}`;
       const look = { ...randomLook(this.rng), shirt: 0x5b5346, pants: 0x3e3a33, shoes: 0x2b2620, sleeves: 'long', cap: null, glasses: false, beard: true, sex: 'm', hairStyle: 'curly', hair: 0x6b6b66 };
-      const npc = new Npc(this.scene, this.physics, look, { x: s.x, y: SIDEWALK_Y, z: s.z, facing: s.facing, name: ['Giuseppe', 'Franco', 'Abdul', 'Mario', 'Ivan', 'Pietro'][i % 6] });
+      const npc = new Npc(this.scene, this.physics, look, { x: s.x, y: SIDEWALK_Y, z: s.z, facing: s.facing, name: localFirstName(look.sex) });
       npc.kind = 'homeless';
       npc.id = id;
       npc.pose = 'sit';
@@ -243,6 +243,27 @@ export class NpcManager {
       this.homeless.push(npc);
       this.refreshGifts(npc);
     });
+  }
+
+  /** Spacciatori: felpa scura e cappellino, appoggiati in un angolo appartato. */
+  spawnDealers(spots) {
+    this.dealers = [];
+    spots.forEach((s, i) => {
+      const look = { ...randomLook(this.rng), shirt: 0x1a1b1f, pants: 0x24262b, shoes: 0x111111, sleeves: 'long', cap: 0x15161a, glasses: i % 2 === 0, sex: 'm' };
+      const npc = new Npc(this.scene, this.physics, look, { x: s.x, y: SIDEWALK_Y, z: s.z, facing: s.facing, name: localNickname(i) });
+      npc.kind = 'dealer';
+      npc.home = s;
+      this.dealers.push(npc);
+    });
+  }
+
+  nearestDealer(x, z, maxDist = 2.2) {
+    let best = null, bestD = maxDist;
+    for (const n of this.dealers || []) {
+      const d = Math.hypot(n.pos.x - x, n.pos.z - z);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    return best;
   }
 
   /** Mostra accanto al barbone i regali "visibili" (sacco a pelo, tenda, coperta). */
@@ -277,7 +298,7 @@ export class NpcManager {
 
   setVisible(v) {
     this.visible = v;
-    for (const n of [...this.pedestrians, ...this.homeless]) {
+    for (const n of [...this.pedestrians, ...this.homeless, ...(this.dealers || [])]) {
       n.setVisible(v);
       if (n.props) n.props.visible = v;
       if (n.giftGroup) n.giftGroup.visible = v;
@@ -368,6 +389,12 @@ export class NpcManager {
       h.lookTarget = d < 6 ? playerFeet : null;
       if (d < 120) h.update(dt);
     }
+    for (const s of this.dealers || []) {
+      const d = s.pos.distanceTo(playerFeet);
+      s.lookTarget = d < 9 ? playerFeet : { x: s.pos.x + Math.sin(s.home.facing), z: s.pos.z + Math.cos(s.home.facing) };
+      s.mesh.visible = d < 80;
+      if (d < 80) s.update(dt);
+    }
   }
 
   /** NPC interagibile più vicino. */
@@ -398,13 +425,14 @@ export class NpcManager {
   }
 
   dispose() {
-    for (const n of [...this.pedestrians, ...this.homeless]) {
+    for (const n of [...this.pedestrians, ...this.homeless, ...(this.dealers || [])]) {
       n.dispose();
       if (n.props) { this.scene.remove(n.props); disposeObject3D(n.props); }
       if (n.giftGroup) { this.scene.remove(n.giftGroup); disposeObject3D(n.giftGroup); }
     }
     this.pedestrians = [];
     this.homeless = [];
+    this.dealers = [];
   }
 }
 

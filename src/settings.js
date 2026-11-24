@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS = {
   shadows: 'high', // 'high' | 'low' | 'off'
   quality: 'high', // 'high' | 'medium' | 'low' (pixel ratio)
   showMinimap: true,
-  lang: 'it', // 'it' | 'en'
+  lang: 'it', // 'it' | 'en' | 'de' | 'ru'
   gearbox: 'auto', // 'auto' | 'manual' (E marcia su, Q marcia giù)
   speedUnit: 'kmh', // 'kmh' | 'mph'
 };
@@ -78,7 +78,7 @@ export function settingsFormHtml(s, { full = true } = {}) {
     <label class="set-row"><span>Cambio</span><select data-set="gearbox">${[['auto', 'Automatico'], ['manual', 'Manuale (E marcia su · Q marcia giù)']].map(([v, l]) => `<option value="${v}" ${s.gearbox === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>
     <label class="set-row"><span>Tachimetro</span><select data-set="speedUnit">${[['kmh', 'km/h'], ['mph', 'mph']].map(([v, l]) => `<option value="${v}" ${s.speedUnit === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>
     <div class="set-group">Lingua</div>
-    <label class="set-row"><span>Lingua</span><select data-set="lang">${[['it', 'Italiano'], ['en', 'English']].map(([v, l]) => `<option value="${v}" ${s.lang === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>`;
+    <label class="set-row"><span>Lingua</span><select data-set="lang">${[['it', 'Italiano'], ['en', 'English'], ['de', 'Deutsch'], ['ru', 'Русский']].map(([v, l]) => `<option value="${v}" ${s.lang === v ? 'selected' : ''}>${l}</option>`).join('')}</select><b></b></label>`;
   }
   html += '<p class="muted">Le impostazioni vengono salvate automaticamente su questo browser.</p></div>';
   return html;

@@ -40,6 +40,23 @@ Poi apri `http://localhost:8080`. I moduli ES6 non funzionano aprendo `index.htm
 - **Felicità**: barra sopra la minimappa.
 - **Garage di casa** (G sulla mappa, accanto alla porta di casa): i veicoli comprati arrivano qui; entra a piedi (E) o guidando piano verso la serranda, fai tuning (vernice, cerchi, vetri, assetto, neon, motore, freni) ed esci guidando oltre la serranda.
 - **Piazza del Monumento** a nord della città con il monumento tipico della tua città (solido, raggiungibile in auto o in taxi), semafori in centro e cartelli nei quartieri.
+- **Ospedale**: barella fino al letto, visita del medico e conto da pagare all'accettazione prima di uscire. Senza soldi: polizia, una notte in prigione, −10 Aura e multa di € 900 (i contanti possono andare in debito). Con Aura a zero paghi € 1.000 al giorno.
+- **Chiesa**: fedeli nei banchi, Messa solo seduto (E sul banco), preghiera in ginocchio davanti all'altare, candele votive accese nella zona candele (+1 Aura). Donazioni ai senzatetto: 0,1 Aura per ogni euro.
+- **Barbiere** (✂ sulla mappa): taglio, colore e barba.
+- **Spacciatori** nascosti nei vicoli dei quartieri poveri: le sostanze danno forti allucinazioni. Non metterti alla guida…
+- **Inventario e telefono senza fermarti**: con TAB aperto continui a camminare; cliccando il telefono l'inventario si chiude e il telefono resta in basso a sinistra mentre cammini o guidi.
+- **Nuovi mezzi**: Vespa Primavera 125cc, Vespa Special 125cc a marce e Kawasaki Ninja H2R (oltre 340 km/h). Prestazioni in base alla cilindrata; tuning motore stage 1, 2 e 3 nel garage di casa.
+- **Negozio di caschi** (K sulla mappa): integrale, adventure, motocross, modulare e jet. Dall'inventario scegli "Usa in moto": lo indossi in sella e dimezza i danni nelle cadute.
+- **Porta interna casa ↔ garage**, case più arredate e più economiche.
+- **Officina** con 4 postazioni e minigioco dei bulloni semplificato (tieni premuto, lascia nel verde).
+- **Traffico** con conducenti sempre visibili, più pedoni, nomi degli abitanti tipici della nazione.
+- **Chiese e cattedrali** più belle: portale con colonne, vetrate, alberi e aiuole fuori; dentro affreschi sul soffitto, crocifisso al centro dell'altare e statua della Madonna a destra.
+- **Madonna e crocifisso in città** (M e ✝ sulla mappa): prega davanti con E, +1 Aura ogni volta.
+- **Domenica**: in chiesa o cattedrale recita Padre Nostro e Ave Maria (testo a schermo e voce), +10 Aura.
+- **Venerdì Santo**: alle 18 processione con il prete, il crocifisso e 50 fedeli dalla Piazza del Monumento alla Cattedrale; alla fine preghi con loro, +10 Aura.
+- **Fontane** in piazza e nel parco (≈ sulla mappa).
+- **Semaforo rosso**: multa di € 500 e −3 Aura. **Furti**: −10 Aura.
+- **Menu**: tasto SHOP (schermata di esempio) e lingue Italiano, English, Deutsch, Русский.
 
 ## Cosa c'è in città
 

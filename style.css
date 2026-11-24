@@ -401,6 +401,11 @@ code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius:
   animation: ctpIn 0.4s ease 0.25s both;
 }
 @keyframes ctpIn { from { opacity: 0; } to { opacity: 1; } }
+/* Avviso leggero: la tastiera funziona già, il clic (sul gioco) serve solo a ricatturare la visuale */
+#click-to-play.soft { inset: 14px 0 auto 0; background: none; pointer-events: none; place-items: start center; }
+#click-to-play.soft .ctp-box { background: rgba(8,10,14,0.72); border: 1px solid rgba(255,255,255,0.14); border-radius: 999px; padding: 7px 18px; }
+#click-to-play.soft .ctp-title { font-size: 13px; letter-spacing: 0.12em; }
+#click-to-play.soft .ctp-sub, #click-to-play.soft .ctp-keys { display: none; }
 .ctp-box { text-align: center; max-width: 640px; }
 .ctp-title { font-family: var(--display); font-size: clamp(28px, 4vw, 42px); letter-spacing: 0.14em; text-transform: uppercase; }
 .ctp-sub { color: var(--muted); margin-top: 8px; font-size: 14px; }
@@ -840,6 +845,17 @@ code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius:
 .torque { position: relative; height: 34px; background: linear-gradient(90deg, #2a2d33, #3a3f47); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; overflow: hidden; }
 .tq-zone { position: absolute; top: 0; bottom: 0; background: rgba(95, 208, 106, 0.55); border-left: 2px solid #8fe08a; border-right: 2px solid #8fe08a; }
 .tq-needle { position: absolute; top: -2px; bottom: -2px; width: 3px; margin-left: -1.5px; background: #ff4f5e; box-shadow: 0 0 8px #ff4f5e; }
+/* Bulloni semplificati: mozzo con bulloni a stella + barra di coppia che si riempie tenendo premuto */
+.bolt-wrap { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.bolt-side { flex: 1 1 260px; display: grid; gap: 10px; }
+.torque.v2 { height: 30px; }
+.torque.v2 .tq-zone { z-index: 1; background: rgba(95, 208, 106, 0.28); }
+.tq-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #ffd24a; transition: background 0.15s; }
+.tq-scale { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.tq-scale b { color: var(--paper); font-size: 14px; }
+.tq-hold { user-select: none; touch-action: none; padding: 14px; }
+.bolt-pulse { animation: boltPulse 1s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes boltPulse { 50% { opacity: 0.25; } }
 .cal-row { display: grid; grid-template-columns: 90px 1fr 52px; align-items: center; gap: 10px; margin: 8px 0; font-size: 13px; }
 .cal-gauge { position: relative; height: 16px; background: rgba(255,255,255,0.08); border-radius: 3px; }
 .cal-gauge u { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1.5px; background: #f0b43c; }
@@ -882,6 +898,40 @@ code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius:
 .btn-lang { position: absolute; top: 22px; right: 26px; z-index: 3; display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: rgba(10, 11, 14, 0.6); border: 1px solid var(--panel-border); border-radius: 22px; cursor: pointer; font-family: var(--display); letter-spacing: 0.16em; font-size: 14px; transition: border-color 0.2s, background 0.2s; }
 .btn-lang:hover, .btn-lang:focus-visible { border-color: var(--accent); background: rgba(240,180,60,0.12); outline: none; }
 .lang-flag { font-size: 20px; line-height: 1; letter-spacing: 0; }
+
+/* Tedesco e russo: parole più lunghe → spaziature più strette e a capo sicuro; per il cirillico
+   un font di riserva che lo supporta (Impact non ha il cirillico), così il layout non si rompe. */
+html[lang="ru"] { --display: 'Oswald', 'Arial Narrow', 'Segoe UI', 'Roboto Condensed', sans-serif; }
+html:is([lang="de"], [lang="ru"]) .btn-main-label { letter-spacing: 0.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:is([lang="de"], [lang="ru"]) .opt-title { letter-spacing: 0.05em; }
+html:is([lang="de"], [lang="ru"]) .menu-kicker { letter-spacing: 0.2em; }
+html:is([lang="de"], [lang="ru"]) :is(.dlg-sub, .shop-info, .ph-row, .inv-tile, .chip, .hud-prompt, .toast) { overflow-wrap: anywhere; hyphens: auto; }
+html:is([lang="de"], [lang="ru"]) .inv-tile .t-name { font-size: 0.92em; }
+
+/* Preghiere recitate (Padre Nostro, Ave Maria): testo completo, riga recitata evidenziata */
+#prayer-overlay { position: fixed; inset: 0; z-index: 58; display: grid; place-items: center; padding: 16px; background: radial-gradient(ellipse at center, rgba(40,30,12,0.55), rgba(0,0,0,0.78)); animation: fadein 0.5s ease; pointer-events: auto; }
+.pr-box { width: min(620px, 100%); max-height: calc(100vh - 32px); overflow: auto; text-align: center; padding: 26px 28px 18px; border-radius: 14px; background: rgba(18,14,8,0.86); border: 1px solid rgba(255,214,120,0.35); box-shadow: 0 0 60px rgba(255,200,90,0.18); }
+.pr-kicker { font-size: 12px; letter-spacing: 0.22em; text-transform: uppercase; color: #e9c46a; }
+.pr-title { font-family: var(--display); font-size: clamp(30px, 5vw, 44px); letter-spacing: 0.08em; margin: 6px 0 14px; color: #fff3d6; }
+.pr-text p { margin: 4px 0; font-size: clamp(15px, 2.2vw, 19px); line-height: 1.45; color: rgba(255,243,214,0.5); transition: color 0.35s, transform 0.35s; font-style: italic; }
+.pr-text p.done { color: rgba(255,243,214,0.78); }
+.pr-text p.on { color: #ffe08a; transform: scale(1.04); text-shadow: 0 0 14px rgba(255,200,90,0.55); }
+.pr-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.pr-hint { font-size: 12px; color: var(--muted); }
+/* Lampo della telecamera del semaforo */
+.cam-flash { position: fixed; inset: 0; z-index: 70; background: #fff; pointer-events: none; animation: camFlash 0.6s ease-out forwards; }
+@keyframes camFlash { 0% { opacity: 0.85; } 100% { opacity: 0; } }
+
+/* Shop (esempi) */
+#menu-shop { position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,0.55); backdrop-filter: blur(6px); animation: fadein 0.25s ease; }
+#menu-shop.hidden { display: none; }
+.shop-box { width: min(560px, 100%); }
+.shop-demo { display: grid; gap: 12px; padding-top: 8px; }
+.shop-demo-tag { justify-self: start; font-family: var(--display); font-size: 22px; letter-spacing: 0.18em; text-transform: uppercase; color: #111; background: var(--accent, #ffd24a); padding: 4px 14px; border-radius: 4px; }
+.shop-demo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 10px; }
+.shop-demo-card { display: grid; gap: 4px; justify-items: center; text-align: center; padding: 14px 8px; border: 1px dashed rgba(255,255,255,0.25); border-radius: 10px; background: rgba(255,255,255,0.04); }
+.shop-demo-card .sd-ico { font-size: 30px; }
+.shop-demo-card small { color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; }
 
 /* Crediti */
 #menu-credits { position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; padding: 16px; background: rgba(0,0,0,0.55); backdrop-filter: blur(6px); animation: fadein 0.25s ease; }
@@ -948,6 +998,15 @@ code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius:
 .hud-balance.danger { border-color: #ff4f5e; animation: drunkBlink 0.35s ease infinite alternate; }
 .hud-beam { display: inline-block; margin-left: 8px; font-style: normal; font-size: 11px; letter-spacing: 0.1em; color: #6fb6ff; text-shadow: 0 0 8px #3a8cff; vertical-align: 6px; }
 .hud-beam.hidden { display: none; }
+
+/* Debito, conto dell'ospedale */
+.hud-money.debt { color: #ff6b6b; }
+.hosp-bill { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 14px; margin: 8px 0 12px; background: rgba(255,255,255,0.05); border: 1px solid var(--panel-border); border-radius: 6px; }
+.hosp-bill b { font-family: var(--display); font-size: 26px; color: #ffd27a; }
+.btn-solid.small.danger { background: #8a1f2f; border-color: #8a1f2f; }
+.barber-grid { display: grid; gap: 10px; }
+.barber-total { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--panel-border); }
+.barber-total b { font-family: var(--display); font-size: 22px; color: #8fe08a; }
 
 /* Tuning */
 .tune-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 8px 10px; margin: 4px 0 6px; background: rgba(255,255,255,0.05); border-radius: 6px; font-size: 12.5px; color: var(--muted); }

@@ -10,7 +10,7 @@ import { AutoSaver } from './save.js';
 import { getCity, getFamily, formatMoney, seededRandom } from './birthdata.js';
 import { Interior, INTERIOR_ORIGIN } from './interiors.js';
 import { PlayerState, GROUPS } from './playerstate.js';
-import { ITEMS, itemInfo, SERVICE_PRICES, PENALTIES } from './items.js';
+import { ITEMS, itemInfo, SERVICE_PRICES, PENALTIES, TOW_REPAIR, TAXI_FARE } from './items.js';
 import { VehicleManager, KIND_LABEL } from './vehicle.js';
 import { NpcManager, pickHomelessSpots } from './npcs.js';
 import { RestaurantService } from './restaurant.js';
@@ -36,6 +36,8 @@ import { PLAZA, SIDEWALK_H, HALF, CELL, GRID, ROAD } from './world.js';
 import { setNameCity } from './names.js';
 import { PrayerReader } from './prayers.js';
 import { Procession } from './procession.js';
+import { TaxiService } from './taxi.js';
+import { saintForLevel } from './saints.js';
 
 const LOOT_ITEMS = ['torcia', 'coperta', 'kit_pronto_soccorso', 'candela'];
 
@@ -154,6 +156,8 @@ export class Game {
     // Preghiere recitate (testo + voce) e processione del Venerdì Santo; semafori: passaggio col rosso
     this.prayers = new PrayerReader(this);
     this.procession = new Procession(this);
+    // Taxi giallo chiamato dal telefono (sedile posteriore in prima persona, tassametro)
+    this.taxi = new TaxiService(this);
     this.lastJunction = null;
     this.redLightCooldown = 0;
     this.tripView = 0;
@@ -486,6 +490,7 @@ export class Game {
       this.updateKnockdown(dt);
       this.updateHigh(dt);
       this.procession.update(dt);
+      this.taxi.update(dt);
       this.checkRedLight(dt);
       this.hospital.update(dt);
       this.physics.step(1 / 60, dt, 5);
@@ -534,18 +539,31 @@ export class Game {
     this.vehicles.sync(dt);
     this.police.sync(dt);
     if (!this.interior) this.traffic.sync(dt);
+    this.taxi.sync(dt);
     if (running && !this.interior) this.vehicles.updateSmoke(dt, this.mapPosition(), this.police.cars);
     this.updateShotFx(dt);
     if (this.driving) this.placeRider();
+    // In taxi: il giocatore è nascosto sul sedile posteriore e la sua posizione segue l'auto
+    if (this.taxi.car && (this.taxi.riding || this.taxi.state === 'boarded')) {
+      const tp = this.taxi.car.body.position;
+      this.player.setPose('hidden', new THREE.Vector3(tp.x, 0, tp.z), this.taxi.h);
+    }
     this.player.animate(running ? dt : 0);
     this.escMenu.update(dt);
 
     // Camera (terza o prima persona; in auto la prima persona mostra l'abitacolo)
     let focus = this.player.feet;
     const carFP = !!(this.driving && this.driving.cockpit && !this.driving.spec.ride);
-    this.rig.allowFirstPerson = (!this.driving && this.player.pose === 'auto') || carFP;
+    const inTaxi = !!(this.taxi.car && (this.taxi.riding || this.taxi.state === 'boarded'));
+    this.rig.allowFirstPerson = (!this.driving && this.player.pose === 'auto') || carFP || inTaxi;
     let eyeOverride = null;
-    if (this.driving) {
+    if (inTaxi) {
+      // Sedile posteriore del taxi: sempre in prima persona, l'abitacolo (cruscotto e sedili) è visibile
+      this.rig.firstPerson = true;
+      focus = this.taxi.eyeWorld().clone();
+      eyeOverride = 0;
+      this.taxi.car.updateCockpit(true);
+    } else if (this.driving) {
       const vp = this.driving.position;
       focus = new THREE.Vector3(vp.x, vp.y, vp.z);
       if (carFP && this.rig.fpBlend > 0.02) {
@@ -779,7 +797,8 @@ export class Game {
     const ctl = control ? {
       throttle: this.input.down('KeyW', 'ArrowUp'),
       brake: this.input.down('KeyS', 'ArrowDown'),
-      steer: (this.input.down('KeyA', 'ArrowLeft') ? 1 : 0) - (this.input.down('KeyD', 'ArrowRight') ? 1 : 0),
+      // Sotto effetto di sostanze lo sterzo devia da solo (highSteer, vedi updateHigh)
+      steer: THREE.MathUtils.clamp((this.input.down('KeyA', 'ArrowLeft') ? 1 : 0) - (this.input.down('KeyD', 'ArrowRight') ? 1 : 0) + (this.highSteer || 0), -1, 1),
       handbrake: this.input.down('Space'),
       wheelie: this.input.down('ShiftLeft', 'ShiftRight'),
       stoppie: this.input.down('ControlLeft'),
@@ -1073,6 +1092,7 @@ export class Game {
     st.changeHappiness(d.alcohol ? 2.5 : 1.5, `Al bar: ${d.name}`);
     if (d.alcohol) {
       st.drunk = Math.min(100, st.drunk + d.alcohol);
+      st.changeAura(-PENALTIES.substanceAura, `Hai bevuto alcol (${d.name})`);
       if (st.drunk > DRUNK_FAINT) { this.faint('drunk'); return; }
       this.toast(st.drunk > 35
         ? `Ubriachezza ${Math.round(st.drunk)}%: la testa gira forte… oltre il ${DRUNK_FAINT}% svieni!`
@@ -1100,6 +1120,9 @@ export class Game {
     audio.confirm();
     this.hud.flashLevel(lvl);
     this.toast(`✨ LIVELLO AURA ${lvl}${lvl >= MAX_AURA_LEVEL ? ' (MASSIMO)' : ''} · ${levelTitle(lvl)} — riscatta la ricompensa nell'app «Livelli» del telefono (TAB).`, 5000);
+    // Il Santo del livello: scheda con immagine e biografia nell'app «Livelli»
+    const saint = saintForLevel(lvl);
+    if (saint) setTimeout(() => { if (!this.disposed) this.toast(`✝ Il Santo del livello ${lvl}: ${saint.name}. Leggi la sua storia nell'app «Livelli».`, 4400); }, 5200);
     this.autosaver.saveNow();
   }
 
@@ -1218,6 +1241,15 @@ export class Game {
       if (eAction === null || dist < eAction.dist) { eLabel = label; eAction = { dist, act }; }
     };
 
+    // In taxi: [E] salta il viaggio, [F] scendi qui (paghi il tassametro)
+    if (this.taxi.riding) {
+      this.hud.setPrompts(`saltare il viaggio (tassametro ${formatMoney(this.taxi.fareFor(this.taxi.meter))})`, 'scendere dal taxi qui');
+      if (this.input.consumePressed('KeyE')) this.taxi.skip();
+      if (this.input.consumePressed('KeyF')) this.taxi.alight(false);
+      return;
+    }
+    if (this.taxi.state === 'boarded') { this.hud.hidePrompt(); return; }
+
     if (this.driving) {
       fLabel = `scendere ${{ bike: 'dalla bici', scooter: 'dal motorino', moto: 'dalla moto' }[this.driving.kind] || `dall'${KIND_LABEL[this.driving.kind]}`}`;
       fAction = () => this.exitVehicle();
@@ -1317,6 +1349,11 @@ export class Game {
         }
       }
     }
+    // Taxi giallo che ti aspetta: [F] per salire dietro
+    if (!this.driving && !this.interior && this.taxi.canBoard(feet)) {
+      fLabel = 'salire sul taxi (sedile posteriore)';
+      fAction = () => this.taxi.board();
+    }
     this.hud.setPrompts(eLabel, fLabel);
     if (eAction && this.input.consumePressed('KeyE')) eAction.act();
     if (fAction && this.input.consumePressed('KeyF')) fAction();
@@ -1355,6 +1392,7 @@ export class Game {
       case 'pew': this.sitInPew(it.data.pew); break;
       case 'barber': this.dialogs.barber(it.data.seat); break;
       case 'togarage': this.passInnerDoor('homegarage'); break;
+      case 'offering': this.markChurchVisit(); this.dialogs.churchOffering(); break;
       case 'tohouse': this.passInnerDoor('home'); break;
       case 'hospital': this.hospital.reception(); break;
       case 'pray': this.pray(it.data); break;
@@ -1676,8 +1714,11 @@ export class Game {
     if (it.cat === 'illegali') {
       st.removeItem(id, 1);
       st.high = Math.min(220, st.high + (it.high || 60));
+      // La sostanza più pesante in corpo decide intensità visiva, sbandate e burrone
+      const cur = ITEMS[st.highDrug];
+      if (!cur || (it.power || 0) >= (cur.power || 0) || st.high <= (it.high || 60)) st.highDrug = id;
       st.stats.drugs++;
-      st.changeAura(-3, `Hai assunto sostanze illegali (${it.name})`);
+      st.changeAura(-PENALTIES.substanceAura, `Hai assunto sostanze illegali (${it.name})`);
       st.changeHappiness(3, 'Euforia artificiale');
       audio.drugs();
       return `${it.name}: tutto inizia a girare e a cambiare colore… Non metterti alla guida!`;
@@ -1787,7 +1828,7 @@ export class Game {
       onDone: () => {
         clearInterval(sparks);
         const st = this.state;
-        const cash = 300 + Math.round(Math.random() * 90) * 10;
+        const cash = PENALTIES.atmRobbery; // € 3.000 dalla cassaforte
         st.cash += cash;
         st.stats.robberies++;
         atm.robbedDay = this.day;
@@ -1795,8 +1836,8 @@ export class Game {
         atm.group.rotation.z = 0.12;
         audio.cash();
         audio.carAlarm(8);
-        st.changeAura(-10, 'Hai rapinato un bancomat (7° comandamento: non rubare)');
-        this.toast(`Hai preso ${formatMoney(cash)} dal bancomat! Scatta l'allarme… (−10 Aura)`, 3400);
+        st.changeAura(-PENALTIES.atmRobberyAura, 'Hai rapinato un bancomat (7° comandamento: non rubare)');
+        this.toast(`Hai preso ${formatMoney(cash)} dal bancomat! Scatta l'allarme… (−${PENALTIES.atmRobberyAura} Aura)`, 3400);
         this.police.report(3, 'Rapina al bancomat');
       },
       onCancel: () => clearInterval(sparks),
@@ -1829,6 +1870,36 @@ export class Game {
     setTimeout(() => { if (!this.disposed) this.autosaver.saveNow(); }, 400);
   }
 
+  /**
+   * Incidente con ricovero: il carro attrezzi porta il tuo veicolo danneggiato all'officina del meccanico.
+   * Si ritira riparato pagando da € 1.000 (lievi danni) a € 3.000 (distrutto). Ritorna il nome o null.
+   */
+  towToWorkshop(v) {
+    if (!v || v.owner !== 'player' || v.inGarage || !this.vehicles.list.includes(v)) return null;
+    if (v.health >= 99) return null;
+    const dmg = Math.min(1, Math.max(0, (100 - v.health) / 100));
+    const cost = Math.round((TOW_REPAIR.min + (TOW_REPAIR.max - TOW_REPAIR.min) * dmg) / 50) * 50;
+    this.state.impound.push({ uid: v.uid, model: v.model, name: v.name, color: v.color, tune: { ...v.tune }, cost });
+    if (this.lastRide && this.lastRide.v === v) this.lastRide = null;
+    this.vehicles.remove(v);
+    this.state.vehicles = this.vehicles.serializeOwned();
+    return { name: v.name, cost };
+  }
+
+  /** Ritiro dall'officina: il veicolo riparato compare sulla strada davanti all'officina. */
+  redeemImpounded(index) {
+    const t = this.state.impound[index];
+    if (!t) return;
+    this.state.impound.splice(index, 1);
+    const ws = this.world.doors.find((d) => d.type === 'workshop');
+    const spot = ws ? { x: ws.x + 6, z: ws.z + ws.nz * 6.5, heading: Math.PI / 2 } : { ...this.world.getSpawn(), heading: 0 };
+    const v = this.vehicles.add({ model: t.model, color: t.color, x: spot.x, z: spot.z, heading: spot.heading, owner: 'player', uid: t.uid, tune: t.tune, health: 100 });
+    if (this.interior) v.mesh.visible = false;
+    this.state.vehicles = this.vehicles.serializeOwned();
+    this.state.changeHappiness(4, `Hai ritirato ${t.name} dall'officina`);
+    this.autosaver.saveNow();
+  }
+
   repairCost(v) {
     const m = VEHICLE_MODELS[v.model];
     const perPoint = (m ? m.price : 5000) / 2500 + 2;
@@ -1836,7 +1907,7 @@ export class Game {
   }
 
   /** Fermato dalla polizia: arresto, multa e veicolo rubato restituito. */
-  busted() {
+  busted(how = null) {
     if (this.transitioning) return;
     const v = this.driving;
     if (v) {
@@ -1847,7 +1918,31 @@ export class Game {
     this.state.cash -= fine;
     this.police.clear(true);
     audio.siren(3);
-    this.arrest(`Gli agenti ti hanno fermato e ammanettato. Multa: ${formatMoney(fine)}.`);
+    this.arrest(how === 'foot'
+      ? `Ti hanno inseguito a piedi, ammanettato e caricato sulla volante. Multa: ${formatMoney(fine)}.`
+      : `Gli agenti ti hanno fermato e ammanettato. Multa: ${formatMoney(fine)}.`);
+  }
+
+  /** Preso a piedi da un agente: mani dietro la schiena, manette, poi la volante ti porta in centrale. */
+  cuffedByPolice(officer) {
+    if (this.transitioning || this.action) return;
+    const f = this.player.feet;
+    officer.state = 'cuff';
+    this.player.aiming = false;
+    this.player.setHeld(null);
+    this.player.facing = Math.atan2(f.x - officer.pos.x, f.z - officer.pos.z); // ti gira di spalle all'agente
+    this.player.workState = 'give';
+    audio.handcuffs();
+    this.toast('Fermo! Un agente ti ha raggiunto e ti mette le manette…', 2400);
+    this.action = {
+      t: 0, dur: 2.2, text: 'Ti ammanettano e ti caricano sulla volante…',
+      onDone: () => {
+        this.player.workState = null;
+        this.player.updateHeld(this.state.equipped);
+        this.busted('foot');
+      },
+      onCancel: () => { this.player.workState = null; this.police.cuffing = false; },
+    };
   }
 
   mountVehicle(v) {
@@ -1907,6 +2002,7 @@ export class Game {
     const ex = this.safeExitPoint(v);
     v.occupied = false;
     this.driving = null;
+    this.lastRide = { v, time: this.elapsed }; // per il carro attrezzi se poco dopo finisci in ospedale
     this.player.showHelmet(null); // il casco si toglie scendendo dalla sella
     audio.engineStop(v.uid);
     audio.door();
@@ -1962,38 +2058,27 @@ export class Game {
   }
 
   /* ---------- Telefono ---------- */
+  /** Corsa in taxi stimata lungo le strade (€ 10-200, vedi TAXI_FARE e taxi.js). */
   taxiFare(door) {
-    const f = this.mapPosition();
-    // Tariffa realistica: scatto iniziale + € 1,20 ogni 10 m di mappa (corsa breve ~ € 10, lunga ~ € 60-90)
-    return Math.round(6 + Math.hypot(door.x - f.x, door.z - f.z) * 0.12);
+    return this.taxi.estimate(door);
+  }
+
+  /** Destinazioni del taxi: piazza e porte della mappa (le case in vendita solo se sono tue). */
+  taxiDestinations() {
+    const st = this.state;
+    const list = [this.plazaTaxiDoor()];
+    for (const d of this.world.doors) {
+      if (d.type === 'house' && !st.houses.includes(d.house.id)) continue;
+      if (d.type === 'homegarage') continue;
+      list.push(d);
+    }
+    return list;
   }
 
   /** Destinazione taxi "Piazza del Monumento" (ingresso sud della piazza). */
   plazaTaxiDoor() {
     const p = this.world.mapData.plaza || PLAZA;
     return { id: 'plaza', type: 'plaza', name: `Piazza del Monumento · ${p.label || ''}`.replace(/ · $/, ''), x: p.x, z: p.z + (p.half || PLAZA.half) - 4, nx: 0, nz: 1 };
-  }
-
-  async taxiTo(door) {
-    if (this.hospital.inside && this.state.hospitalBill > 0) {
-      this.tabMenu.call('🚕', 'Radio Taxi', `Prima devi pagare le cure all'accettazione dell'ospedale (${formatMoney(this.state.hospitalBill)}).`);
-      return;
-    }
-    const fare = this.taxiFare(door);
-    if (!this.state.pay(fare)) { this.tabMenu.call('🚕', 'Radio Taxi', `Servono ${formatMoney(fare)} in contanti.`); return; }
-    this.closeTabMenu();
-    if (this.driving) this.exitVehicle();
-    this.transitioning = true;
-    await fadeTo(1, 0.5, '#000');
-    if (this.disposed) return;
-    this.leaveInteriorImmediate();
-    const spot = this.world.doorExitSpot(door);
-    this.player.setPosition(spot.x, 0.25, spot.z, spot.facing);
-    this.rig.yaw = spot.facing;
-    this.hour = Math.min(23.9, this.hour + 0.25);
-    await fadeTo(0, 0.6);
-    this.transitioning = false;
-    this.toast(`Taxi: arrivato a ${door.name} (−${formatMoney(fare)}).`, 2600);
   }
 
   phoneCall(id, tab) {
@@ -2220,6 +2305,8 @@ export class Game {
     if (this.transitioning) return;
     this.transitioning = true;
     const drunk = kind === 'drunk';
+    // Incidente (salute a zero mentre guidavi o appena caduto dal mezzo): il veicolo andrà in officina
+    const crashed = !drunk ? (this.driving || (this.lastRide && this.elapsed - this.lastRide.time < 25 ? this.lastRide.v : null)) : null;
     if (this.driving) this.exitVehicle();
     if (this.convo.isOpen) this.convo.close();
     this.player.aiming = false;
@@ -2244,6 +2331,7 @@ export class Game {
       st.changeAura(-10, 'Ti sei ubriacato fino a svenire');
     }
     this.hour = Math.min(23.5, this.hour + 6);
+    const towed = this.towToWorkshop(crashed);
     // Ricovero: barella fino alla stanza, medico, ringraziamento, conto all'accettazione
     await this.hospital.admit({
       reason: drunk ? 'drunk' : 'faint',
@@ -2251,6 +2339,15 @@ export class Game {
       title: drunk ? 'Coma etilico: l\'ambulanza ti porta in ospedale in barella…' : 'Sei svenuto: i paramedici ti portano in barella…',
       sub: drunk ? 'Coma etilico (−10 Aura)' : 'Sei svenuto',
     });
+    this.announceTow(towed);
+  }
+
+  /** Avviso del carro attrezzi dopo il risveglio in ospedale. */
+  announceTow(towed) {
+    if (!towed || this.disposed) return;
+    setTimeout(() => {
+      if (!this.disposed) this.toast(`Il carro attrezzi ha portato ${towed.name} all'Officina (O sulla mappa): ritiralo riparato pagando ${formatMoney(towed.cost)}.`, 5200);
+    }, 4500);
   }
 
   /* =====================================================================
@@ -2259,13 +2356,21 @@ export class Game {
   updateHigh(dt) {
     const st = this.state;
     if (st.high > 0) st.high = Math.max(0, st.high - dt);
-    const target = Math.min(1, st.high / 35);
+    if (st.high <= 0) st.highDrug = null;
+    // Ogni sostanza ha la sua intensità (power), il suo sbandamento (wobble) e il suo tempo prima del burrone (cliff)
+    const drug = ITEMS[st.highDrug] || ITEMS.pillole;
+    const power = drug.power ?? 1;
+    // Intensità piena = power della sostanza (erba 0,45 … acido 1,6); svanisce negli ultimi 35 secondi
+    const target = Math.min(1.6, Math.min(1, st.high / 35) * power);
     this.tripView += (target - this.tripView) * Math.min(1, dt * 0.8);
+    this.highSteer = 0;
     if (this.driving && st.high > 0 && !this.cliffFall && !this.transitioning) {
       this.highDriveT += dt;
-      // Sbandamento: lo sterzo impazzisce per qualche istante, poi il burrone
-      if (this.highDriveT > 1.6) this.driving.steer = Math.sin(this.elapsed * 9) * 1.2;
-      if (this.highDriveT > 3) this.cliffCrash();
+      // Sbandamento: lo sterzo devia da solo (più forte con le sostanze pesanti), poi l'eventuale burrone
+      const ramp = Math.min(1, this.highDriveT / 1.5) * Math.min(1, st.high / 20);
+      const e = this.elapsed;
+      this.highSteer = (drug.wobble ?? 0.6) * ramp * (Math.sin(e * 2.3) * 0.6 + Math.sin(e * 5.7 + 1.3) * 0.4) * 1.3;
+      if (drug.cliff != null && this.highDriveT > drug.cliff) this.cliffCrash();
     } else if (!this.driving) this.highDriveT = 0;
     if (this.cliffFall) {
       this.cliffFall.t += dt;
@@ -2318,12 +2423,15 @@ export class Game {
     st.changeAura(-15, 'Hai guidato sotto effetto di sostanze e sei precipitato');
     st.changeHappiness(-15, 'Precipitato nel burrone');
     this.transitioning = false;
+    if (this.driving === v) this.exitVehicle();
+    const towed = this.towToWorkshop(v);
     await this.hospital.admit({
       reason: 'cliff',
       bill: SERVICE_PRICES.faintBill,
       title: 'Sei precipitato nel burrone: l\'elisoccorso ti porta in ospedale…',
       sub: 'Ti risvegli in ospedale (−15 Aura)',
     });
+    this.announceTow(towed);
   }
 
   /* =====================================================================
@@ -2337,6 +2445,7 @@ export class Game {
     this.police.setVisible(v);
     this.vehicles.smoke.setVisible(v);
     if (this.procession) this.procession.setVisible(v);
+    if (this.taxi) this.taxi.setVisible(v);
   }
 
   /* =====================================================================
@@ -2421,6 +2530,8 @@ export class Game {
         ctx: {
           familyId: this.family.id, city: this.city, seed: this.seed,
           houseTier: door.house ? door.house.tier : null, houseId: door.house ? door.house.id : null,
+          // Domeniche e feste: chiese più affollate
+          festive: dayInfo(this.today()).red,
         },
       });
     } catch (e) {
@@ -2577,6 +2688,7 @@ export class Game {
     this.hospital.dispose();
     this.prayers.dispose();
     this.procession.dispose();
+    this.taxi.dispose();
     this.renderer.toneMappingExposure = 1; // il menu principale torna all'esposizione neutra
     this.escMenu.close();
     this.escMenu.dispose();

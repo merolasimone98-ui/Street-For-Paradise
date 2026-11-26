@@ -4,21 +4,29 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { Vehicle } from './vehicle.js';
+import { Npc } from './npcs.js';
 import { GROUPS } from './playerstate.js';
-import { HALF, CELL, RINGS, GRID } from './world.js';
+import { HALF, CELL, RINGS, GRID, BLOCK, URBAN_HALF, SIDEWALK_H } from './world.js';
 import { audio } from './audio.js';
 
 const MAX_STARS = 3;
-// Polizia più impegnativa: vedono più lontano e più di lato, ti sentono da più vicino,
-// cercano più a lungo e sono più numerose e più veloci (vedi spawnCar).
-const VIEW_DIST = 155;
-const VIEW_HALF_ANGLE = THREE.MathUtils.degToRad(85);
-const NEAR_SENSE = 24; // da vicino ti "sentono" anche alle spalle
-const BLINK_AFTER = 12; // secondi fuori vista prima che le stelle lampeggino
-const LOSE_AFTER = 30; // secondi fuori vista per far perdere le tracce
-const DIRECT_CHASE = 60; // sotto questa distanza (e in vista) puntano dritto al giocatore
-const RADIO_UPDATE = 9; // con 3 stelle la centrale ritrasmette la tua posizione ogni tot secondi
+// Polizia molto più difficile da seminare: vedono più lontano e più di lato, ti sentono da più vicino,
+// la centrale ritrasmette la tua posizione anche con una stella e servono quasi 1 minuto fuori vista.
+const VIEW_DIST = 190;
+const VIEW_HALF_ANGLE = THREE.MathUtils.degToRad(88);
+const NEAR_SENSE = 34; // da vicino ti "sentono" anche alle spalle
+const BLINK_AFTER = 26; // secondi fuori vista prima che le stelle lampeggino
+const LOSE_AFTER = 55; // secondi fuori vista per far perdere le tracce
+const DIRECT_CHASE = 70; // sotto questa distanza (e in vista) puntano dritto al giocatore
+const RADIO_UPDATE = 6; // la centrale ritrasmette la tua posizione ogni tot secondi (con 3 stelle)
 const ARREST_DIST = 6.5;
+// Inseguimento a piedi: se scappi a piedi gli agenti scendono dalla volante, ti rincorrono seguendo
+// la strada che hai fatto tu (niente scorciatoie nei muri), ti ammanettano e ti caricano in pattuglia.
+const DEPLOY_DIST = 26; // la volante si ferma e gli agenti scendono sotto questa distanza
+const OFFICER_SPEED = 6.4; // m/s di corsa (tu corri più veloce solo finché hai stamina)
+const CUFF_DIST = 1.15;
+const TRAIL_STEP = 0.9; // distanza tra due "impronte" del giocatore
+const GIVE_UP_DIST = 90;
 const MIN_LINE = -RINGS, MAX_LINE = GRID + RINGS;
 
 /** Coordinata della strada (linea di mezzeria) più vicina. */
@@ -48,6 +56,9 @@ export class PoliceManager {
     this.ray = new CANNON.RaycastResult();
     this._from = new CANNON.Vec3();
     this._to = new CANNON.Vec3();
+    this.officers = []; // agenti a piedi
+    this.trail = []; // percorso fatto a piedi dal giocatore (gli agenti lo seguono)
+    this.cuffing = false;
     const door = game.world.doors.find((d) => d.type === 'police');
     // Uscita del garage: strada davanti alla stazione, auto orientata lungo la carreggiata
     this.garage = door
@@ -88,12 +99,133 @@ export class PoliceManager {
     this.stars = 0;
     this.unseen = 0;
     this.arrestT = 0;
+    this.cuffing = false;
+    this.trail = [];
     for (const c of this.cars) {
       c.sirenOn = false;
       c.leaving = true;
       c.leaveT = 0;
+      c.deployed = false;
     }
+    // Gli agenti a piedi tornano in pattuglia (o spariscono subito)
+    if (immediate) this.disposeOfficers();
+    else for (const o of this.officers) o.state = 'return';
     if (immediate) this.disposeCars();
+  }
+
+  /* ---------- Inseguimento a piedi ---------- */
+  /** Quota del terreno: marciapiede sui blocchi della città, asfalto sulle strade, terreno fuori città. */
+  groundY(x, z) {
+    if (Math.abs(x) < URBAN_HALF && Math.abs(z) < URBAN_HALF) {
+      const lx = ((x + HALF) % CELL + CELL) % CELL, lz = ((z + HALF) % CELL + CELL) % CELL;
+      const onBlock = lx > CELL - BLOCK - (CELL - BLOCK) / 2 && lz > (CELL - BLOCK) / 2 && lx < CELL - (CELL - BLOCK) / 2 && lz < CELL - (CELL - BLOCK) / 2;
+      return onBlock ? SIDEWALK_H : 0;
+    }
+    return Math.max(0, this.game.world.getHeight(x, z));
+  }
+
+  /** Due agenti scendono dalla volante ferma e iniziano a inseguirti. */
+  deploy(car) {
+    const g = this.game;
+    car.deployed = true;
+    const p = car.body.position;
+    const h = car.heading;
+    for (const side of [-1, 1]) {
+      const x = p.x + Math.cos(h) * side * 1.4, z = p.z - Math.sin(h) * side * 1.4;
+      const o = new Npc(g.scene, g.physics, {
+        sex: side < 0 ? 'm' : (Math.random() < 0.5 ? 'f' : 'm'), skin: [0xe7bc98, 0xb7835b, 0xd29f78][Math.floor(Math.random() * 3)], hair: 0x1b1410,
+        shirt: 0x2c4a7a, pants: 0x1b2a4a, shoes: 0x111111, sleeves: 'long', uniform: 'police', height: 1.76 + Math.random() * 0.1,
+      }, { x, y: this.groundY(x, z), z, facing: h, name: 'Agente' });
+      o.mesh.visible = this.visible;
+      o.state = 'chase';
+      o.car = car;
+      o.trailIdx = Math.max(0, this.trail.length - 1);
+      o.speed = 0;
+      this.officers.push(o);
+    }
+    audio.door();
+    g.toast('🚔 Gli agenti scendono dalla volante e ti inseguono a piedi!', 2600);
+  }
+
+  /** L'agente vede direttamente il giocatore (nessun palazzo in mezzo)? */
+  officerSees(o, t) {
+    this._from.set(o.pos.x, o.pos.y + 1.4, o.pos.z);
+    this._to.set(t.x, t.y + 1.2, t.z);
+    this.ray.reset();
+    this.game.physics.raycastClosest(this._from, this._to, { collisionFilterMask: GROUPS.WORLD, skipBackfaces: true }, this.ray);
+    return !(this.ray.hasHit && this.ray.distance < Math.hypot(t.x - o.pos.x, t.z - o.pos.z) - 0.8);
+  }
+
+  updateOfficers(dt) {
+    const g = this.game;
+    const f = g.player.feet;
+    const onFoot = !g.driving && !g.interior && !g.taxi?.riding;
+    // Impronte: il percorso fatto a piedi dal giocatore mentre è ricercato
+    if (this.stars && onFoot) {
+      const last = this.trail[this.trail.length - 1];
+      if (!last || Math.hypot(last.x - f.x, last.z - f.z) > TRAIL_STEP) this.trail.push({ x: f.x, y: f.y, z: f.z });
+      if (this.trail.length > 600) this.trail.splice(0, 100);
+    }
+    for (const o of this.officers) {
+      let tx, tz, ty;
+      const d = Math.hypot(f.x - o.pos.x, f.z - o.pos.z);
+      if (o.state === 'chase' && (!onFoot || !this.stars || d > GIVE_UP_DIST)) o.state = 'return';
+      if (o.state === 'chase') {
+        if (this.officerSees(o, f)) {
+          // In vista: dritto verso di te (e le impronte ripartono da qui)
+          tx = f.x; tz = f.z; ty = f.y;
+          o.trailIdx = Math.max(0, this.trail.length - 1);
+        } else {
+          // Fuori vista: segue le tue impronte, punto per punto
+          while (o.trailIdx < this.trail.length - 1 && Math.hypot(this.trail[o.trailIdx].x - o.pos.x, this.trail[o.trailIdx].z - o.pos.z) < 0.7) o.trailIdx++;
+          const tp = this.trail[Math.min(o.trailIdx, this.trail.length - 1)] || f;
+          tx = tp.x; tz = tp.z; ty = tp.y;
+        }
+        if (d < CUFF_DIST && !this.cuffing && !g.transitioning && !g.action) {
+          this.cuffing = true;
+          g.cuffedByPolice(o);
+        }
+      } else if (o.state === 'cuff') {
+        tx = o.pos.x; tz = o.pos.z; ty = o.pos.y;
+      } else {
+        // Ritorno alla volante
+        const cp = o.car && !o.car.dead ? o.car.body.position : o.pos;
+        tx = cp.x; tz = cp.z; ty = o.pos.y;
+        if (Math.hypot(cp.x - o.pos.x, cp.z - o.pos.z) < 2 || !o.car || o.car.dead) o.dead = true;
+      }
+      const dx = tx - o.pos.x, dz = tz - o.pos.z;
+      const dist = Math.hypot(dx, dz);
+      const want = o.state === 'cuff' ? 0 : o.state === 'return' ? 3.2 : OFFICER_SPEED;
+      o.speed += (Math.min(want, dist / Math.max(dt, 1e-3)) - o.speed) * Math.min(1, dt * 5);
+      if (dist > 0.05) {
+        const step = Math.min(dist, o.speed * dt);
+        o.pos.x += (dx / dist) * step;
+        o.pos.z += (dz / dist) * step;
+        const a = Math.atan2(dx, dz);
+        let da = a - o.facing;
+        while (da > Math.PI) da -= Math.PI * 2;
+        while (da < -Math.PI) da += Math.PI * 2;
+        o.facing += da * Math.min(1, dt * 10);
+      } else if (o.state === 'cuff') {
+        o.facing = Math.atan2(f.x - o.pos.x, f.z - o.pos.z);
+      }
+      o.pos.y += ((ty ?? this.groundY(o.pos.x, o.pos.z)) - o.pos.y) * Math.min(1, dt * 8);
+      o.body.velocity.set(0, 0, 0);
+      o.body.position.set(o.pos.x, o.pos.y, o.pos.z);
+      o.sync();
+      o.animator.update(dt, { speed: o.speed, grounded: true, state: o.state === 'cuff' ? 'give' : 'auto' });
+    }
+    for (const o of this.officers.filter((x) => x.dead)) {
+      if (o.car) o.car.deployed = this.officers.some((x) => x !== o && !x.dead && x.car === o.car);
+      o.dispose();
+    }
+    this.officers = this.officers.filter((x) => !x.dead);
+  }
+
+  disposeOfficers() {
+    for (const o of this.officers) o.dispose();
+    this.officers = [];
+    for (const c of this.cars) c.deployed = false;
   }
 
   spawnCar() {
@@ -177,7 +309,7 @@ export class PoliceManager {
 
   update(dt) {
     const g = this.game;
-    if (!this.stars && !this.cars.length) return;
+    if (!this.stars && !this.cars.length && !this.officers.length) return;
     const target = g.mapPosition();
     const tgt = { x: target.x, y: g.driving ? g.driving.body.position.y : g.player.feet.y, z: target.z };
 
@@ -189,10 +321,10 @@ export class PoliceManager {
         this.spawnCar();
         this.spawnTimer = 1.8;
       }
-      // Con 2-3 stelle la centrale aggiorna via radio la tua ultima posizione nota
+      // La centrale aggiorna via radio la tua ultima posizione nota (anche con una sola stella)
       this.radioT = (this.radioT || 0) - dt;
-      if (this.stars >= 2 && this.radioT <= 0) {
-        this.radioT = this.stars >= 3 ? RADIO_UPDATE : RADIO_UPDATE * 1.6;
+      if (this.stars >= 1 && this.radioT <= 0) {
+        this.radioT = this.stars >= 3 ? RADIO_UPDATE : this.stars === 2 ? RADIO_UPDATE * 1.5 : RADIO_UPDATE * 2.2;
         if (this.unseen < LOSE_AFTER * 0.6) this.lastKnown = { x: tgt.x, z: tgt.z };
       }
       let seen = false;
@@ -229,14 +361,31 @@ export class PoliceManager {
       const sees = this.unseen === 0;
       const goal = sees ? tgt : (this.lastKnown || tgt);
       const d = Math.hypot(c.body.position.x - tgt.x, c.body.position.z - tgt.z);
+      const onFoot = !g.driving && !g.interior && !(g.taxi && g.taxi.riding);
+      // A piedi e vicino: la volante inchioda e gli agenti scendono (una sola coppia di agenti per volta)
+      if (onFoot && !c.deployed && d < DEPLOY_DIST && sees && !this.officers.some((o) => o.state === 'chase')) {
+        c.update(dt, { throttle: false, brake: true, steer: 0, handbrake: true });
+        if (Math.abs(c.speed) < 3) this.deploy(c);
+        continue;
+      }
+      if (c.deployed) {
+        // Volante ferma con le porte aperte finché gli agenti non tornano
+        c.update(dt, { throttle: false, brake: true, steer: 0, handbrake: true });
+        continue;
+      }
       this.drive(c, dt, goal, sees && d < DIRECT_CHASE);
       if (d < ARREST_DIST && sees) closeCar = true;
     }
-    for (const c of this.cars.filter((x) => x.dead)) c.dispose();
+    for (const c of this.cars.filter((x) => x.dead)) {
+      for (const o of this.officers) if (o.car === c) o.car = null;
+      c.dispose();
+    }
     this.cars = this.cars.filter((x) => !x.dead);
+    this.updateOfficers(dt);
 
-    // Arresto: una volante ti blocca (a piedi o con il mezzo quasi fermo) per un secondo e mezzo
-    const slow = !g.driving || Math.abs(g.driving.speed) < 2.5;
+    // Arresto in auto: una volante ti blocca con il mezzo quasi fermo per un secondo e mezzo
+    // (a piedi ti prendono gli agenti, vedi updateOfficers)
+    const slow = g.driving && Math.abs(g.driving.speed) < 2.5;
     if (this.stars && closeCar && slow && !g.transitioning) {
       this.arrestT += dt;
       if (this.arrestT > 1.5) {
@@ -255,11 +404,12 @@ export class PoliceManager {
   setVisible(v) {
     this.visible = v;
     for (const c of this.cars) c.mesh.visible = v;
+    for (const o of this.officers) o.mesh.visible = v;
   }
 
   /** Posizioni per la mappa e la minimappa. */
   dots() {
-    return this.cars.map((c) => ({ x: c.body.position.x, z: c.body.position.z }));
+    return [...this.cars, ...this.officers.map((o) => ({ body: { position: o.pos } }))].map((c) => ({ x: c.body.position.x, z: c.body.position.z }));
   }
 
   disposeCars() {
@@ -268,6 +418,7 @@ export class PoliceManager {
   }
 
   dispose() {
+    this.disposeOfficers();
     this.disposeCars();
   }
 }

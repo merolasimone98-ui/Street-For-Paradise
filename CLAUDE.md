@@ -41,6 +41,8 @@ Gioco open-world 3D in terza persona ispirato a GTA IV, sviluppato interamente p
 - `src/models.js`: modelli glTF/GLB opzionali elencati in `assets/models/manifest.json` (GLTFLoader + DRACO/KTX2/Meshopt r160 da `three/addons/`); sostituiscono la carrozzeria dei veicoli, con ritorno al modello procedurale se il file manca.
 - `src/traffic.js`: traffico NPC (auto, scooter, Vespe, moto con pilota) su corsie di destra con curve di Bézier agli incroci; semafori (`world.trafficPhase`), STOP, precedenze, distanza di sicurezza, fari/stop, clacson; corpi Cannon-es cinematici; si riposizionano attorno al giocatore.
 - `src/garage.js`: garage fisico di casa (4 box): consegne del concessionario, entrata/uscita guidando dalla serranda, veicoli custoditi fuori dalla fisica finché non entri.
+- `src/taxi.js`: `TaxiService`: taxi giallo chiamato dal telefono, percorso sulle strade (corsia di destra), stati idle → arriving → waiting → boarded → riding → leaving, vista posteriore in prima persona (`eyeWorld`), tariffa `TAXI_FARE` (€ 10-200), E salta il viaggio, F scende.
+- `src/saints.js`: 99 santi (`SAINTS`, uno per Livello Aura) con `saintForLevel`, immagine da Wikipedia (`fetchSaintImage`, REST summary con cache e timeout) e ripiego SVG (`saintFallbackImage`).
 - `src/sacred.js`: arte sacra e arredo urbano procedurali (`makeCrucifix`, `makeMadonna`, `makeShrine` con faretti finti emissivi, `makeFountain` con acqua animata, `frescoTexture` per i soffitti).
 - `src/prayers.js`: `PrayerReader.recite(['padreNostro','aveMaria'])`: testo completo a schermo (non tradotto, `data-notr`) e voce italiana con Web Speech API (maschile/femminile), ripiego a tempo senza voce.
 - `src/procession.js`: processione del Venerdì Santo (dalle 18, prete con crocifisso + 2 chierichetti + 50 fedeli in file da 4, dalla Piazza del Monumento alla Cattedrale).
@@ -87,6 +89,13 @@ Gioco open-world 3D in terza persona ispirato a GTA IV, sviluppato interamente p
 - Tasti: tasto destro = mira con la pistola (camera sulla spalla + puntino), sinistro = sparo; E vicino a un'auto chiusa con il cacciavite = scasso/saccheggio, F = furto; E al bancomat con la motosega equipaggiata = rapina.
 - Crimini → `game.police.report(stelle, motivo)`.
 - Mappa: città centrale + 4 anelli di quartieri residenziali (`RINGS`), colline, lago e montagne (heightfield Cannon-es allineato alla mesh del terreno). Non cambiare la sequenza RNG della città: romperebbe i salvataggi.
+
+- Carro attrezzi: incidente con ricovero → `game.towToWorkshop` mette il veicolo in `state.impound` (costo `TOW_REPAIR` € 1.000-3.000 secondo il danno), ritiro dall'officina (`dialogs.repairShop`).
+- Sostanze: alcol o droga = −1 Aura subito (`PENALTIES.substanceAura`); droghe in `items.js` con `power`/`wobble`/`cliff` (più costose = effetto e sbandata più forti).
+- Chiesa: offerte (`dialogs.churchOffering`, +1 Aura esatta, max 5/giorno); domeniche e feste (`ctx.festive`) chiesa quasi piena e fedeli in piedi.
+- Bancomat: massimo 3 per città (`MAX_ATMS`); rapina € 3.000 e −10 Aura. Spacciatori nascosti nei vicoli dietro un cassonetto.
+- Polizia a piedi: con il giocatore a piedi la volante si ferma a 26 m e scendono 2 agenti (`police.deploy`), che seguono la scia del giocatore, lo ammanettano (`game.cuffedByPolice`) e lo portano in prigione.
+- Lavori: paga dell'officina ×2,2 (`JOB_PAY_MULT`).
 
 ## Standard tecnici di rendering (Three.js r160 via CDN, niente bundler)
 - **Versioni bloccate:** `three@0.160.0` e `cannon-es@0.20.0` nell'importmap. Non aggiornare senza richiesta esplicita (in r160 `THREE.Timer` non è nel core: si usa il delta di `performance.now()`).

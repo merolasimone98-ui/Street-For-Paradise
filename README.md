@@ -37,6 +37,11 @@ Poi apri `http://localhost:8080`. I moduli ES6 non funzionano aprendo `index.htm
 
 ## Novità
 
+- **Taxi giallo**: chiamalo dal telefono (app Taxi), sali con F, scegli la destinazione e viaggia sul sedile posteriore in prima persona; E salta il viaggio, F scende. Corsa da € 10 a € 200 in base alla distanza.
+- **Carro attrezzi**: dopo un incidente con ricovero il tuo veicolo va all'officina; lo ritiri riparato per € 1.000-3.000.
+- **Chiesa**: cassetta delle offerte (+1 Aura, max 5 al giorno) e chiesa piena la domenica e nei giorni di festa.
+- **Polizia** più tenace: con il giocatore a piedi gli agenti scendono, ti inseguono, ti ammanettano e ti portano in prigione.
+- **99 Santi**: ogni Livello Aura ha il suo santo con immagine (da Wikipedia, con ripiego grafico) nell'app Livelli.
 - **Lingua** italiano / inglese dal pulsante con la bandiera in alto a destra nel menu (anche nelle Impostazioni): tutto il gioco si traduce subito.
 - **Crediti** nel menu principale, sotto Impostazioni.
 - **Impostazioni di guida**: cambio automatico o manuale, tachimetro in km/h o mph.

@@ -8,6 +8,7 @@ import { audio, bindUiSounds } from './audio.js';
 import { $, confirmDialog } from './ui.js';
 import { rewardFor, levelTitle, MAX_AURA_LEVEL, PARADISE_LEVEL, PARADISE_PREVIEW_LEVEL } from './aura.js';
 import { tr } from './i18n.js';
+import { saintForLevel, saintFallbackImage, fetchSaintImage } from './saints.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const EXT = WORLD_EXT;
@@ -253,7 +254,7 @@ const PHONE_APPS = [
 ];
 const PHONE_TITLES = {
   contacts: 'Telefono', garage: 'Garage', wallet: 'Wallet', taxi: 'Radio Taxi', aura: 'Aura', levels: 'Livelli Aura',
-  mood: 'Umore', memories: 'Ricordi', notes: 'Note', call: 'Chiamata in corso',
+  mood: 'Umore', memories: 'Ricordi', notes: 'Note', call: 'Chiamata in corso', saint: 'Santo del livello',
 };
 
 export class TabMenu {
@@ -431,7 +432,8 @@ export class TabMenu {
         const status = claimed
           ? '<em class="lv-done">✓ Riscattata</em>'
           : l <= lvl ? `<span class="chip lv-claim" data-tb="claim" data-l="${l}">Riscatta</span>` : '<em class="lv-lock">🔒</em>';
-        rows.push(`<div class="lv-row ${l <= lvl ? 'on' : ''}"><b>${l}</b><span>${esc(r.label)}</span>${status}</div>`);
+        const saint = saintForLevel(l);
+        rows.push(`<div class="lv-row ${l <= lvl ? 'on' : ''}"><b>${l}</b><span>${esc(r.label)}${saint ? `<button class="lv-saint" data-tb="saint" data-l="${l}">✝ ${esc(saint.name)}</button>` : ''}</span>${status}</div>`);
       }
       if (upTo < MAX_AURA_LEVEL) {
         const r = rewardFor(MAX_AURA_LEVEL);
@@ -474,10 +476,26 @@ export class TabMenu {
         <div class="ph-card wallet"><small>Conto corrente</small><b>${st.bank.account ? formatMoney(st.bank.balance) : '—'}</b>${st.bank.account ? '' : '<p>Nessun conto: aprilo in banca per avere la carta.</p>'}</div>
         ${section('Patrimonio', `<div class="ph-list">${row('data-tb="noop"', '🏠', 'Case di proprietà', '', String(st.houses.length))}${row('data-tb="app" data-s="garage"', '🚗', 'Veicoli', '', String(g.ownedVehicles().length))}</div>`)}`;
     } else if (this.phoneScreen === 'taxi') {
-      // Le case in vendita non compaiono tra le destinazioni (solo quelle di tua proprietà)
-      const dests = g.world.doors.map((d, i) => [d, i]).filter(([d]) => !(d.type === 'house' && !st.houses.includes(d.house.id)));
-      const plaza = g.plazaTaxiDoor();
-      screen = `${section('Luoghi', `<div class="ph-list">${row('data-tb="taxi" data-i="plaza"', '★', plaza.name, formatMoney(g.taxiFare(plaza)), '🚕')}${dests.map(([d, i]) => row(`data-tb="taxi" data-i="${i}"`, '📍', d.name, formatMoney(g.taxiFare(d)), '🚕')).join('')}</div>`)}`;
+      // Taxi giallo: arriva sulla strada davanti a te; sali dietro con F e scegli la destinazione a bordo
+      const t = g.taxi;
+      const status = { idle: 'Nessun taxi in arrivo.', arriving: 'Il taxi giallo sta arrivando…', waiting: 'Il taxi ti aspetta: sali dietro con F.', boarded: 'Sei a bordo.', riding: `In viaggio · tassametro ${formatMoney(t.fareFor(t.meter))}`, leaving: 'Il taxi sta ripartendo.' }[t.state] || '';
+      screen = `<div class="ph-card"><b>🚕 Radio Taxi</b><small>${esc(status)}</small>
+          <p class="ph-tip">Corsa da € 10 a € 200 in base alla strada percorsa. Durante il viaggio: E salta il viaggio, F scendi.</p></div>
+        <button class="ph-btn" data-tb="calltaxi" ${t.state === 'idle' ? '' : 'disabled'}>Chiama un taxi giallo</button>`;
+    } else if (this.phoneScreen === 'saint') {
+      // Scheda del Santo del livello: immagine dal web (Wikipedia) con ritratto di ripiego sempre disponibile
+      const l = this.saintLevel || 1;
+      const s = saintForLevel(l);
+      const reached = st.auraLevel >= l;
+      const fallback = saintFallbackImage(s, l);
+      screen = `<div class="saint-card">
+          <div class="saint-img"><img id="saint-img" alt="" src="${fallback}" data-l="${l}"></div>
+          <div class="saint-level">Livello ${l}${reached ? ' · raggiunto' : ' · da raggiungere'}</div>
+          <b class="saint-name">${esc(s.name)}</b>
+          <small class="saint-feast">Festa: ${esc(s.feast)} · ${esc(s.patron)}</small>
+          <p class="saint-bio">${esc(s.bio)}</p>
+          <div class="saint-nav"><button data-tb="saint" data-l="${Math.max(1, l - 1)}" ${l <= 1 ? 'disabled' : ''}>‹ Precedente</button><button data-tb="saint" data-l="${Math.min(99, l + 1)}" ${l >= 99 ? 'disabled' : ''}>Successivo ›</button></div>
+        </div>`;
     } else if (this.phoneScreen === 'call') {
       screen = `<div class="ph-call"><div class="ph-avatar">${this.callIcon}</div><b>${esc(this.callName)}</b><p>${this.callText}</p><button class="ph-btn end" data-tb="hangup">Riaggancia</button></div>`;
     }
@@ -488,6 +506,18 @@ export class TabMenu {
       <div class="ph-screen ${this.phoneScreen === 'home' ? 'home' : ''}">${screen}</div>
       <div class="ph-nav"><button data-tb="back" title="Indietro (Backspace)">‹</button><button data-tb="home" title="Home">◯</button><button data-tb="phoneclose" title="Riponi il telefono">✕</button></div>
     </div>`;
+    // Immagine del Santo: si carica dal web e sostituisce il ritratto di ripiego solo se arriva davvero
+    if (this.phoneScreen === 'saint') {
+      const l = this.saintLevel || 1;
+      fetchSaintImage(saintForLevel(l)).then((src) => {
+        const img = this.phoneRoot.querySelector('#saint-img');
+        if (!src || !img || Number(img.dataset.l) !== l) return;
+        const probe = new Image();
+        probe.referrerPolicy = 'no-referrer';
+        probe.onload = () => { if (img.isConnected) img.src = src; };
+        probe.src = src;
+      });
+    }
   }
 
   /** Mostra una "chiamata" sul telefono (lo apre se era in tasca). */
@@ -558,12 +588,16 @@ export class TabMenu {
         else if (d.s === 'dealer') { g.closeTabMenu(); g.dialogs.dealer(true); }
         else this.phoneGo(d.s);
         break;
+      case 'saint':
+        this.saintLevel = Number(d.l);
+        if (this.phoneScreen === 'saint') this.renderPhone(); else this.phoneGo('saint');
+        break;
       case 'claim':
         this.levelMsg = g.claimReward(Number(d.l));
         if (this.isOpen) { this.render(); this.renderPhone(); }
         break;
       case 'call': g.phoneCall(d.id, this); break;
-      case 'taxi': g.taxiTo(d.i === 'plaza' ? g.plazaTaxiDoor() : g.world.doors[Number(d.i)]); break;
+      case 'calltaxi': g.taxi.call(); this.renderPhone(); break;
       default: break;
     }
   }

@@ -22,6 +22,8 @@ const LAKE = { x: -560, z: 120, r: 75 };
 export const LAKE_SPOT = { x: LAKE.x + LAKE.r + 30, z: LAKE.z, heading: -Math.PI / 2 };
 // Gradino del marciapiede: basso (12 cm) per salirci a piedi e coi veicoli senza incastrarsi
 export const SIDEWALK_H = 0.12;
+/** Bancomat per città (uno accanto alla banca + due sparsi). */
+const MAX_ATMS = 3;
 /**
  * Piazza del Monumento: a nord della città, in campagna, collegata alla strada nord-sud x = PLAZA.x.
  * Il terreno viene spianato sotto la piazza e lungo la strada d'accesso (vedi terrainHeight).
@@ -726,9 +728,22 @@ export class CityWorld {
     for (const [r, c] of [[5, 0], [6, 2], [4, 6], [5, 2]]) {
       if (this.features[`${r},${c}`]) continue;
       const cx = -HALF + c * CELL + CELL / 2, cz = -HALF + r * CELL + CELL / 2;
-      spots.push({ x: cx + BLOCK / 2 - 2.4, z: cz - 7.5, facing: -Math.PI / 2 });
+      // Più nascosti: addossati al muro del palazzo (a mezzo metro), coperti verso la strada da un cassonetto
+      spots.push({ x: cx + BLOCK / 2 - 3.5, z: cz - 7.5, facing: -Math.PI / 2 });
     }
     this.dealerSpots = spots.slice(0, 3);
+    const binMat = new THREE.MeshStandardMaterial({ color: 0x2f4a32, roughness: 0.7, metalness: 0.3 });
+    const lidMat = new THREE.MeshStandardMaterial({ color: 0x1d2a1e, roughness: 0.6, metalness: 0.2 });
+    for (const s of this.dealerSpots) {
+      const bx = s.x + 1.6, bz = s.z - 0.6;
+      const bin = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.3, 1.9), binMat);
+      bin.position.set(bx, SIDEWALK_H + 0.65, bz);
+      bin.castShadow = bin.receiveShadow = true;
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(1.08, 0.08, 1.98), lidMat);
+      lid.position.set(bx, SIDEWALK_H + 1.34, bz);
+      this.root.add(bin, lid);
+      this.addStaticBox(bx, SIDEWALK_H + 0.65, bz, 0.5, 0.65, 0.95);
+    }
   }
 
   /* ---------- Piazza del Monumento ---------- */
@@ -1038,11 +1053,13 @@ export class CityWorld {
     const spots = [];
     const bankDoor = this.doors.find((d) => d.type === 'bank');
     if (bankDoor) spots.push({ x: bankDoor.x + 4.5, z: bankDoor.z + bankDoor.nz * 0.35, nz: bankDoor.nz });
-    const picks = [[1, 1], [3, 5], [4, 2], [5, 4], [3, 0], [0, 5], [6, 1], [5, 6]];
+    const picks = [[3, 5], [4, 2], [1, 1], [5, 4], [3, 0], [0, 5], [6, 1], [5, 6]];
     for (const [r, c] of picks) {
       const cx = blockCenter(c), cz = blockCenter(r);
       spots.push({ x: cx + 3, z: cz + BLOCK / 2 - 0.9, nz: -1 });
     }
+    // Al massimo 3 bancomat per città (quello della banca + due in quartieri diversi)
+    spots.length = Math.min(spots.length, MAX_ATMS);
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x2c3e50, metalness: 0.6, roughness: 0.35 });
     const screenMat = new THREE.MeshStandardMaterial({ color: 0x0a1a2a, emissive: 0x3fa9ff, emissiveIntensity: 0.9 });
     const topMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x7fd0ff, emissiveIntensity: 0.8 });

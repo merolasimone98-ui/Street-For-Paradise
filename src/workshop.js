@@ -14,6 +14,8 @@ import { localSurname } from './names.js';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
+/** Moltiplicatore dei compensi da meccanico (paga base del guasto × 2,2). */
+const JOB_PAY_MULT = 2.2;
 const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 
 const ZONE_LABEL = { hood: 'nel vano motore (cofano)', under: 'sotto l\'auto', trunk: 'nel bagagliaio' };
@@ -187,7 +189,8 @@ export class Workshop {
     const fault = pick(FAULTS);
     const job = {
       id: this.uid++, bayIndex, bay, spec, mesh, wheels: built.wheels, body, from, to, fault,
-      pay: fault.pay + Math.round(Math.random() * 6) * 10, state: 'arriving', t: 0, customer: null, look: randomLook(),
+      // Compensi aumentati: ogni lavoro rende circa il doppio (più una mancia variabile)
+      pay: Math.round((fault.pay * JOB_PAY_MULT + Math.round(Math.random() * 12) * 10) / 10) * 10, state: 'arriving', t: 0, customer: null, look: randomLook(),
       name: '',
     };
     // Cliente con cognome tipico del posto (names.js)

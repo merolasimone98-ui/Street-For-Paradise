@@ -1245,8 +1245,11 @@ const BUILDERS = {
         I.interact(pew.aisleX, z + 0.1, 'sederti nel banco (Messa)', 'pew', { pew }, 0.9);
       }
     }
-    // Fedeli seduti tra i banchi (6-11 persone, posti casuali)
-    const faithful = 6 + Math.floor(rng() * 6);
+    // Fedeli seduti tra i banchi: 6-11 nei giorni feriali, chiesa piena la domenica e nei giorni festivi
+    const seatsTotal = I.pews.reduce((n, p) => n + p.seats.length, 0);
+    const faithful = ctx.festive
+      ? Math.min(seatsTotal - 8, Math.round(seatsTotal * (0.55 + rng() * 0.15)))
+      : 6 + Math.floor(rng() * 6);
     for (let n = 0; n < faithful; n++) {
       const pew = I.pews[Math.floor(rng() * I.pews.length)];
       const free = pew.seats.filter((s) => !s.taken);
@@ -1255,8 +1258,24 @@ const BUILDERS = {
       seat.taken = true;
       I.npcSit({ sex: rng() < 0.55 ? 'f' : 'm', sleeves: 'long' }, seat.x, pew.z, Math.PI, 0.5);
     }
-    // Qualcuno in piedi in fondo e vicino alle candele
+    // Qualcuno in piedi in fondo e vicino alle candele (nei giorni di festa anche lungo le navate laterali)
     I.npc({ sex: 'f', sleeves: 'long', shirt: 0x2f3b55 }, -(w / 2 - 2.2), d / 2 - 4, Math.PI);
+    if (ctx.festive) {
+      const standX = w / 2 - 0.9;
+      for (let z = -d / 2 + 9; z < d / 2 - 5; z += 3.2) {
+        for (const sx of [-1, 1]) {
+          if (sx < 0 && Math.abs(z) < 1.6) continue; // davanti al confessionale resta libero
+          I.npc({ sex: rng() < 0.5 ? 'f' : 'm', sleeves: 'long' }, sx * standX, z, Math.PI);
+        }
+      }
+    }
+    // Cassetta delle offerte vicino all'ingresso (+1 Aura per offerta, massimo 5 al giorno)
+    const boxX = -(w / 2 - 1.6), boxZ = d / 2 - 2.2;
+    I.box(0.5, 1.0, 0.4, std(0x4a3020, { roughness: 0.5 }), boxX, 0.5, boxZ, { solid: true, shadow: true });
+    I.box(0.52, 0.06, 0.42, std(0xd6a73a, { metalness: 0.9, roughness: 0.25 }), boxX, 1.03, boxZ);
+    I.box(0.16, 0.012, 0.03, std(0x111111), boxX, 1.065, boxZ);
+    I.sign('OFFERTE', '#ffd98a', 0.6, 0.16, boxX, 1.25, boxZ + 0.21, 0, 'rgba(30,22,12,0.95)');
+    I.interact(boxX, boxZ - 0.7, 'fare un\'offerta in chiesa (+1 Aura)', 'offering', {}, 1.2);
     // Presbiterio, altare e croce
     I.box(Math.min(10, w - 2), 0.4, 4, std(0xe8e0d0, { roughness: 0.3 }), 0, 0.2, -d / 2 + 2.2, { solid: true });
     I.box(2.6, 1.0, 1.0, std(0xf4efe4, { roughness: 0.3 }), 0, 0.9, -d / 2 + 2.4, { solid: true, shadow: true });
@@ -1824,28 +1843,66 @@ function buildDiner(I, ctx, kind) {
   for (const [x, z] of [[-5, -2.5], [0, -2.5], [5, -2.5], [-5, 1], [0, 1], [5, 1]]) I.light(x, h - 0.65, z, 0xffd6a0, pizza ? 5 : 6, { fixture: 'pendant', shadow: x === 0 && z === 1 });
 
   // Tavoli: il giocatore si siede sul lato +Z (guardando verso il fondo)
-  const clothMat = pizza
-    ? std(0xffffff, { map: TEX.tiles((x, y) => ((x + y) % 2 ? 0xffffff : 0xc0392b), '#ffffff', rng, 8, 1, 1), roughness: 1 })
-    : std(0xf6f2ea, { roughness: 1 });
+  // Tovaglia a quadretti bianco-rossi (trattoria e pizzeria), con l'orlo che ricade sui bordi del tavolo
+  const checks = canvasTex(256, (g, s) => {
+    const n = 8, q = s / n;
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      g.fillStyle = (x + y) % 2 ? '#f7f3ec' : '#c0392b';
+      g.fillRect(x * q, y * q, q, q);
+    }
+    // Trama del tessuto: righe sottili più chiare dove i quadri si incrociano
+    g.globalAlpha = 0.18;
+    g.fillStyle = '#ffffff';
+    for (let i = 0; i < s; i += 4) { g.fillRect(i, 0, 1, s); g.fillRect(0, i, s, 1); }
+    g.globalAlpha = 1;
+  }, 1, 1);
+  const clothMat = std(0xffffff, { map: checks, roughness: 0.95 });
+  const silver = std(0xd6dade, { metalness: 0.95, roughness: 0.18 });
+  const porcelain = std(0xffffff, { roughness: 0.15 });
+  const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xe8f4ff, roughness: 0.02, transparent: true, opacity: 0.35, ior: 1.5 });
+  const napkinMat = std(0xf2ede2, { roughness: 1 });
+  /** Coperto: piatto, forchetta a sinistra, coltello e cucchiaio a destra, bicchiere e tovagliolo. dir = +1 verso +Z. */
+  const placeSetting = (tx, tz, dir, plate = true) => {
+    const z = tz + dir * 0.32;
+    // Sul posto del giocatore il piatto lo porta il cameriere (niente piatto doppio)
+    if (plate) I.mesh(new THREE.CylinderGeometry(0.15, 0.11, 0.018, 24), porcelain, tx, 0.808, z).castShadow = false;
+    const side = dir; // la destra del commensale seduto sul lato dir
+    const fork = I.box(0.018, 0.006, 0.19, silver, tx + side * 0.2, 0.803, z);
+    const knife = I.box(0.016, 0.006, 0.21, silver, tx - side * 0.2, 0.803, z);
+    const spoon = I.box(0.02, 0.006, 0.17, silver, tx - side * 0.25, 0.803, z);
+    for (const c of [fork, knife, spoon]) c.castShadow = false;
+    I.box(0.1, 0.01, 0.1, napkinMat, tx + side * 0.29, 0.805, z + dir * 0.02).castShadow = false;
+    I.mesh(new THREE.CylinderGeometry(0.035, 0.028, 0.11, 12), glassMat, tx - side * 0.17, 0.855, z - dir * 0.17).castShadow = false;
+  };
+  const seatDiner = (tx, tz, dir) => {
+    // dir = −1: seduto sul lato −Z guardando +Z; +1: lato +Z guardando −Z
+    const diner = makePerson({ ...randomLook(rng) });
+    diner.position.set(tx, 0.5 - diner.userData.hipHeight, tz + dir * 0.8);
+    diner.rotation.y = dir < 0 ? 0 : Math.PI;
+    diner.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    I.group.add(diner);
+    const anim = new HumanAnimator(diner);
+    const ph = rng() * 10;
+    I.animators.push((t, dt) => anim.update(dt, { state: 'sit', look: Math.sin(t * 0.3 + ph) * 0.3 }));
+  };
   const tables = [[-4.6, -2.6], [-4.6, 0.6], [-4.6, 3.6], [4.6, -2.0], [4.6, 1.0], [4.6, 4.0]];
   tables.forEach(([tx, tz], idx) => {
     I.table(tx, tz, 1.1, 1.1, 0x4a3020, 0.76);
     I.box(1.2, 0.02, 1.2, clothMat, tx, 0.79, tz);
-    I.mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.18, 8), std(0xe8e8e8, { roughness: 0.1 }), tx + 0.3, 0.88, tz - 0.3);
+    for (const [hx, hz, hw, hd] of [[0, 0.6, 1.22, 0.02], [0, -0.6, 1.22, 0.02], [0.6, 0, 0.02, 1.22], [-0.6, 0, 0.02, 1.22]]) {
+      I.box(hw, 0.16, hd, clothMat, tx + hx, 0.71, tz + hz).castShadow = false;
+    }
+    // Ampolle di olio e aceto, saliera
+    I.mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.14, 8), std(0xd4b54a, { roughness: 0.1 }), tx + 0.06, 0.87, tz);
+    I.mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.14, 8), std(0x5a1a14, { roughness: 0.1 }), tx - 0.06, 0.87, tz);
     I.chair(tx, tz + 0.8, Math.PI, 0x5a3a24);
     I.chair(tx, tz - 0.8, 0, 0x5a3a24);
-    // Alcuni tavoli sono occupati da clienti NPC
-    if (idx % 3 === 1) {
-      const diner = makePerson({ ...randomLook(rng) });
-      diner.position.set(tx, 0.5 - diner.userData.hipHeight, tz - 0.8);
-      diner.rotation.y = 0;
-      diner.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-      I.group.add(diner);
-      const anim = new HumanAnimator(diner);
-      const ph = rng() * 10;
-      I.animators.push((t, dt) => anim.update(dt, { state: 'sit', look: Math.sin(t * 0.3 + ph) * 0.3 }));
-      const plate = I.mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.02, 20), std(0xffffff, { roughness: 0.2 }), tx, 0.81, tz - 0.35);
-      plate.castShadow = false;
+    placeSetting(tx, tz, -1);
+    placeSetting(tx, tz, 1, idx % 2 === 1);
+    // Metà dei tavoli è occupata da coppie di clienti (due NPC seduti l'uno di fronte all'altro)
+    if (idx % 2 === 1) {
+      seatDiner(tx, tz, -1);
+      seatDiner(tx, tz, 1);
     } else {
       const seatIndex = I.seats.length;
       I.seats.push({

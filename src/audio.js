@@ -784,6 +784,14 @@ class AudioEngine {
     this.burst({ start: 0.08, dur: 0.5, gain: 0.04, type: 'bandpass', freq: 1200, q: 0.7 });
   }
 
+  /** Manette: due scatti metallici a cricchetto. */
+  handcuffs() {
+    if (!this.ready) return;
+    for (let i = 0; i < 6; i++) this.burst({ start: i * 0.045, dur: 0.02, gain: 0.07, type: 'highpass', freq: 4200 });
+    this.tone({ type: 'triangle', freq: 2600, start: 0, dur: 0.06, gain: 0.03 });
+    for (let i = 0; i < 6; i++) this.burst({ start: 0.5 + i * 0.045, dur: 0.02, gain: 0.07, type: 'highpass', freq: 4600 });
+  }
+
   /** Scatto della telecamera del semaforo (T-red): clic dell'otturatore e fischio del flash che si ricarica. */
   cameraFlash() {
     if (!this.ready) return;

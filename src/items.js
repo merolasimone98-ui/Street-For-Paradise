@@ -33,10 +33,15 @@ export const ITEMS = {
   tenda: { name: 'Tenda da campeggio', cat: 'varie', price: 190, icon: '⛺', desc: 'Due posti, montaggio rapido.' },
   coperta: { name: 'Coperta', cat: 'varie', price: 30, icon: '🧣', desc: 'Lana pesante.' },
   candela: { name: 'Candela votiva', cat: 'varie', price: 2, icon: '🕯️', desc: 'Da accendere in chiesa.' },
-  // Sostanze illegali (spacciatori nei vicoli): effetto allucinogeno, vietato guidare
-  erba: { name: 'Erba', cat: 'illegali', price: 30, icon: '🌿', desc: 'Illegale. Effetto distorto per un po\'. Non metterti alla guida.', high: 70 },
-  pillole: { name: 'Pillole sconosciute', cat: 'illegali', price: 45, icon: '💊', desc: 'Illegali, di provenienza ignota. Allucinazioni forti.', high: 100 },
-  polvere: { name: 'Polvere bianca', cat: 'illegali', price: 90, icon: '🧂', desc: 'Illegale e pericolosissima. Visione completamente distorta.', high: 140 },
+  // Sostanze illegali (spacciatori nei vicoli). Più sono pesanti, più costano e più alterano vista e guida:
+  // high = secondi di effetto · power = intensità visiva (0..1,6) · wobble = sbandamento dello sterzo (0..1)
+  // · cliff = secondi di guida prima dell'allucinazione del burrone (null = solo sbandate, niente burrone)
+  erba: { name: 'Erba', cat: 'illegali', price: 30, icon: '🌿', desc: 'Illegale. Colori leggermente alterati e riflessi lenti: alla guida il mezzo sbanda un po\'.', high: 70, power: 0.45, wobble: 0.22, cliff: null },
+  hashish: { name: 'Hashish', cat: 'illegali', price: 55, icon: '🟫', desc: 'Illegale. Visione ondeggiante e sterzo impreciso.', high: 90, power: 0.62, wobble: 0.38, cliff: null },
+  pillole: { name: 'Pillole sconosciute', cat: 'illegali', price: 90, icon: '💊', desc: 'Illegali, di provenienza ignota. Allucinazioni forti: guidando perdi il controllo dopo pochi secondi.', high: 100, power: 0.85, wobble: 0.6, cliff: 7 },
+  funghi: { name: 'Funghi allucinogeni', cat: 'illegali', price: 140, icon: '🍄', desc: 'Illegali. Vortici di colori e mondo deformato: alla guida è un disastro.', high: 120, power: 1.1, wobble: 0.75, cliff: 5 },
+  polvere: { name: 'Polvere bianca', cat: 'illegali', price: 220, icon: '🧂', desc: 'Illegale e pericolosissima. Visione completamente distorta e sterzo impazzito.', high: 140, power: 1.3, wobble: 0.9, cliff: 3.5 },
+  acido: { name: 'Acido (francobollo)', cat: 'illegali', price: 320, icon: '🟪', desc: 'Il più pesante: il mondo si capovolge. Al volante il burrone arriva quasi subito.', high: 170, power: 1.6, wobble: 1.0, cliff: 2.5 },
   // Documenti
   carta_credito: { name: 'Carta di credito', cat: 'documenti', price: 0, icon: '💳', desc: 'Usala agli ATM con il tuo PIN.' },
 };
@@ -129,7 +134,17 @@ export const PENALTIES = {
   statuePrayerAura: 1, // preghiera davanti alla Madonna o al crocifisso in città
   sundayPrayerAura: 10, // Padre Nostro e Ave Maria in chiesa la domenica
   processionAura: 10, // fine della processione del Venerdì Santo in cattedrale
+  substanceAura: 1, // appena bevi alcol o assumi una sostanza (oltre agli effetti su vista e guida)
+  offeringAura: 1, // offerta in chiesa (max 5 al giorno, come le candele)
+  atmRobbery: 3000, // contanti presi rompendo un bancomat
+  atmRobberyAura: 10,
 };
+
+/* ---------- Officina: recupero del veicolo distrutto dopo un incidente con ricovero ---------- */
+export const TOW_REPAIR = { min: 1000, max: 3000 };
+
+/* ---------- Taxi giallo: tariffa da € 10 a € 200 in base alla distanza ---------- */
+export const TAXI_FARE = { base: 10, perMeter: 0.18, max: 200 };
 
 /* ---------- Salone di bellezza / barbiere ---------- */
 export const BARBER = {
@@ -139,7 +154,7 @@ export const BARBER = {
 };
 
 /* ---------- Spacciatori nei vicoli ---------- */
-export const DEALER_STOCK = ['erba', 'pillole', 'polvere'];
+export const DEALER_STOCK = ['erba', 'hashish', 'pillole', 'funghi', 'polvere', 'acido'];
 
 /* ---------- Menù di ristorante e pizzeria ---------- */
 export const MENUS = {

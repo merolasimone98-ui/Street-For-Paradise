@@ -53,11 +53,15 @@ export class PlayerState {
     // Ospedale: conto da pagare all'accettazione prima di uscire; sostanze illegali (secondi di effetto)
     this.hospitalBill = Math.max(0, s.hospitalBill ?? 0);
     this.high = Math.max(0, s.high ?? 0);
+    this.highDrug = s.highDrug || null; // sostanza più pesante ancora in corpo (intensità degli effetti)
+    this.churchOfferings = s.churchOfferings || { day: -1, n: 0 }; // offerte in chiesa che danno Aura oggi
     this.stats.drugs = this.stats.drugs || 0;
     this.stats.debtPenalties = this.stats.debtPenalties || 0;
     this.happyLog = Array.isArray(s.happyLog) ? s.happyLog.slice(0, 8) : [];
     // Casco scelto per moto/scooter/bici (indossato solo in sella)
     this.helmet = s.helmet && this.count(s.helmet) > 0 ? s.helmet : null;
+    // Veicoli distrutti portati in officina dopo un incidente con ricovero: { uid, name, cost }
+    this.impound = Array.isArray(s.impound) ? s.impound.slice() : [];
     // Il telefono è un oggetto dell'inventario: si apre solo cliccandolo nel menu TAB
     if (!this.has('telefono')) this.inventory.unshift({ id: 'telefono', qty: 1 });
   }
@@ -97,7 +101,8 @@ export class PlayerState {
       auraLevel: this.auraLevel, rewardsClaimed: this.rewardsClaimed, lastChurchDay: this.lastChurchDay,
       lastChurchPenaltyDay: this.lastChurchPenaltyDay, drunk: Math.round(this.drunk), houses: this.houses,
       jobs: this.jobs, happiness: Math.round(this.happiness * 10) / 10, happyLog: this.happyLog,
-      hospitalBill: this.hospitalBill, high: Math.round(this.high), helmet: this.helmet,
+      hospitalBill: this.hospitalBill, high: Math.round(this.high), helmet: this.helmet, highDrug: this.highDrug,
+      churchOfferings: this.churchOfferings, impound: this.impound,
     };
   }
 

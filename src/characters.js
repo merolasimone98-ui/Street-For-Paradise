@@ -377,12 +377,15 @@ export function makeHelmet(type = 'integrale', color = 0x1b1d22, accent = 0xc530
   const smoke = new THREE.MeshPhysicalMaterial({ color: 0x0e1218, roughness: 0.04, metalness: 0.3, transparent: true, opacity: 0.82, clearcoat: 1 });
   const clear = new THREE.MeshPhysicalMaterial({ color: 0xcfe0ea, roughness: 0.03, transparent: true, opacity: 0.32, clearcoat: 1 });
   const open = type === 'jet';
+  // In SphereGeometry l'angolo phi = π/2 punta verso +Z (il davanti del viso): visiere e mentoniera
+  // sono centrate lì, la nuca sul lato opposto (prima erano ruotate di 90°, verso destra).
+  const FRONT = Math.PI / 2;
   // Guscio: calotta che copre nuca e tempie (il jet lascia scoperto il viso)
   const dome = new THREE.Mesh(new THREE.SphereGeometry(0.142, 28, 20, 0, Math.PI * 2, 0, Math.PI * (open ? 0.62 : 0.7)), shell);
   dome.scale.set(0.95, 1.0, 1.08);
   dome.position.y = 0.12;
   g.add(dome);
-  const back = new THREE.Mesh(new THREE.SphereGeometry(0.14, 24, 14, Math.PI * 0.55, Math.PI * 0.9, Math.PI * 0.45, Math.PI * 0.4), shell);
+  const back = new THREE.Mesh(new THREE.SphereGeometry(0.14, 24, 14, FRONT + Math.PI - Math.PI * 0.45, Math.PI * 0.9, Math.PI * 0.45, Math.PI * 0.4), shell);
   back.scale.set(0.95, 1.05, 1.05);
   back.position.y = 0.12;
   g.add(back);
@@ -399,11 +402,11 @@ export function makeHelmet(type = 'integrale', color = 0x1b1d22, accent = 0xc530
   g.add(rim);
   if (type === 'integrale' || type === 'adventure' || type === 'modulare') {
     // Mentoniera chiusa e visiera
-    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.115, 20, 12, -Math.PI * 0.38, Math.PI * 0.76, Math.PI * 0.55, Math.PI * 0.4), type === 'modulare' ? acc : shell);
+    const chin = new THREE.Mesh(new THREE.SphereGeometry(0.115, 20, 12, FRONT - Math.PI * 0.38, Math.PI * 0.76, Math.PI * 0.55, Math.PI * 0.4), type === 'modulare' ? acc : shell);
     chin.scale.set(1, 1, 1.25);
     chin.position.set(0, 0.11, 0.015);
     g.add(chin);
-    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.146, 22, 10, -Math.PI * 0.33, Math.PI * 0.66, Math.PI * 0.32, Math.PI * 0.2), type === 'modulare' ? clear : smoke);
+    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.146, 22, 10, FRONT - Math.PI * 0.33, Math.PI * 0.66, Math.PI * 0.32, Math.PI * 0.2), type === 'modulare' ? clear : smoke);
     visor.scale.set(0.96, 1, 1.1);
     visor.position.y = 0.115;
     g.add(visor);
@@ -440,7 +443,7 @@ export function makeHelmet(type = 'integrale', color = 0x1b1d22, accent = 0xc530
   }
   if (type === 'jet') {
     // Visierina corta trasparente con bottoni laterali
-    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.15, 22, 10, -Math.PI * 0.36, Math.PI * 0.72, Math.PI * 0.3, Math.PI * 0.27), clear);
+    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.15, 22, 10, FRONT - Math.PI * 0.36, Math.PI * 0.72, Math.PI * 0.3, Math.PI * 0.27), clear);
     visor.position.y = 0.115;
     g.add(visor);
     for (const sx of [-1, 1]) {
@@ -600,11 +603,13 @@ export class HumanAnimator {
       rate = 10;
       if (pedal !== null) {
         // Bicicletta: le gambe spingono sui pedali (pedivelle opposte, piedi che seguono il pedale)
+        // Fase del pedale sinistro: a = 0 in basso, π/2 dietro, π in alto, 3π/2 davanti (come la guarnitura).
+        // Coscia più alzata con il piede in alto-avanti, ginocchio più piegato con il pedale in alto.
         const a = pedal;
-        t.thighL = -0.95 + Math.sin(a) * 0.42;
-        t.thighR = -0.95 + Math.sin(a + Math.PI) * 0.42;
-        t.shinL = 1.05 + Math.cos(a) * 0.42 + 0.1;
-        t.shinR = 1.05 + Math.cos(a + Math.PI) * 0.42 + 0.1;
+        t.thighL = -0.95 + Math.sin(a + Math.PI / 4) * 0.42;
+        t.thighR = -0.95 + Math.sin(a + Math.PI + Math.PI / 4) * 0.42;
+        t.shinL = 1.15 - Math.cos(a) * 0.42;
+        t.shinR = 1.15 - Math.cos(a + Math.PI) * 0.42;
         t.footL = -0.25 + Math.sin(a + 0.6) * 0.22;
         t.footR = -0.25 + Math.sin(a + Math.PI + 0.6) * 0.22;
         t.hipsRoll += Math.sin(a) * 0.04;

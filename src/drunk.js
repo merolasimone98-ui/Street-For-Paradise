@@ -32,7 +32,7 @@ export class DrunkEffect {
             float ang = atan(p.y, p.x) + sin(time * 0.7 + r * 9.0) * 0.55 * trip;
             float zoom = 1.0 + sin(time * 1.9) * 0.08 * trip;
             p = vec2(cos(ang), sin(ang)) * r / zoom;
-            p.x = mix(p.x, abs(p.x), 0.5 * trip * (0.5 + 0.5 * sin(time * 0.35)));
+            p.x = mix(p.x, abs(p.x), 0.5 * min(trip, 1.0) * (0.5 + 0.5 * sin(time * 0.35)));
             uv = p + 0.5;
           }
           uv += vec2(sin(uv.y * 11.0 + time * 2.1), cos(uv.x * 9.0 + time * 1.7)) * 0.013 * amount;
@@ -44,8 +44,8 @@ export class DrunkEffect {
           if (trip > 0.001) {
             // Aberrazione cromatica forte e colori che ruotano senza sosta
             vec2 sp = vec2(0.012 + 0.01 * sin(time * 3.0), 0.0) * trip;
-            c.r = mix(c.r, texture2D(tDiffuse, uv + sp).r, trip);
-            c.b = mix(c.b, texture2D(tDiffuse, uv - sp).b, trip);
+            c.r = mix(c.r, texture2D(tDiffuse, uv + sp).r, min(trip, 1.0));
+            c.b = mix(c.b, texture2D(tDiffuse, uv - sp).b, min(trip, 1.0));
             c.rgb = hueShift(c.rgb, time * 1.6 * trip);
             c.rgb += vec3(0.25, 0.05, 0.35) * trip * (0.5 + 0.5 * sin(time * 4.0 + vUv.y * 20.0)) * 0.35;
           }
@@ -68,8 +68,9 @@ export class DrunkEffect {
 
   /** Disegna la scena: normale se amount è ~0, altrimenti con l'effetto. */
   render(scene, camera, amount, time, trip = 0) {
-    this.material.uniforms.trip.value = Math.min(1, trip);
-    amount = Math.max(amount, trip * 0.8);
+    // trip 0..1.6: le sostanze più pesanti superano 1 (vortice, zoom e colori più forti; i mix restano limitati a 1)
+    this.material.uniforms.trip.value = Math.min(1.6, trip);
+    amount = Math.max(amount, Math.min(1, trip * 0.8));
     if (amount < 0.01) {
       this.renderer.render(scene, camera);
       return;

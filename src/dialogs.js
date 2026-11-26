@@ -1,5 +1,5 @@
 // Finestre di dialogo del gameplay: negozi, concessionario, banca, ATM, menù ristorante, scontrino, donazioni, guardaroba.
-import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, DRINKS, TUNING, VEHICLE_DELIVERY_FEE, BARBER, DEALER_STOCK, ENGINE_STAGES, HELMETS, itemInfo } from './items.js';
+import { ITEMS, CLOTHES, CLOTH_SLOTS, VEHICLE_MODELS, MENUS, SHOP_STOCK, DRINKS, TUNING, VEHICLE_DELIVERY_FEE, BARBER, DEALER_STOCK, ENGINE_STAGES, HELMETS, PENALTIES, TOW_REPAIR, itemInfo } from './items.js';
 import { calendarHtml, dayInfo, formatDate, MONTHS_IT } from './calendar.js';
 import { formatMoney } from './birthdata.js';
 import { $ } from './ui.js';
@@ -291,6 +291,70 @@ export class Dialogs {
     render();
   }
 
+  /* ---------- Taxi: scelta della destinazione dal sedile posteriore ---------- */
+  taxiDestinations(taxi, onPick, onCancel) {
+    const g = this.game;
+    let picked = false;
+    const rows = g.taxiDestinations().map((d, i) => {
+      const fare = taxi.estimate(d);
+      return `<div class="shop-row"><div class="shop-icon">${d.type === 'plaza' ? '★' : '📍'}</div>
+        <div class="shop-info"><b>${esc(d.name)}</b><span>Corsa stimata · ${formatMoney(fare)}</span></div>
+        <button class="btn-solid small" data-act="go" data-i="${i}">Vai</button></div>`;
+    }).join('');
+    this.show({
+      title: 'Taxi · dove la porto?',
+      subtitle: 'Sei seduto dietro. Il tassametro parte da € 10 e arriva al massimo a € 200: paghi alla fine in contanti (o con la carta).',
+      wide: true,
+      body: `<div class="shop-list">${rows}</div>`,
+      onClose: () => { if (!picked) onCancel(); },
+      handlers: {
+        go: (d) => {
+          picked = true;
+          const door = g.taxiDestinations()[Number(d.i)];
+          this.close();
+          onPick(door);
+        },
+      },
+    });
+  }
+
+  /* ---------- Offerta in chiesa (cassetta delle offerte) ---------- */
+  /** Ogni offerta dà +1 Aura (massimo 5 al giorno, come le candele); oltre il limite resta un gesto di carità. */
+  churchOffering() {
+    const g = this.game;
+    const s = g.state;
+    const MAX = 5;
+    const render = (msg = '') => {
+      if (s.churchOfferings.day !== g.day) s.churchOfferings = { day: g.day, n: 0 };
+      const left = MAX - s.churchOfferings.n;
+      this.show({
+        title: 'Cassetta delle offerte',
+        subtitle: `Ogni offerta sostiene la parrocchia e i poveri: +1 Aura (oggi ancora ${Math.max(0, left)} su ${MAX}).`,
+        body: `${this.payToggleHtml()}${msg}<div class="chips">${[2, 5, 10, 20, 50].map((a) => `<button class="chip" data-act="give" data-a="${a}">${formatMoney(a)}</button>`).join('')}</div>`,
+        handlers: {
+          pay: (d) => { this.payMethod = d.m; render(); },
+          give: (d) => {
+            const amount = Number(d.a);
+            if (!s.payWith(amount, this.payMethod)) { render('<p class="warn">Fondi insufficienti.</p>'); return; }
+            audio.cash();
+            s.stats.donations++;
+            s.stats.donatedMoney = (s.stats.donatedMoney || 0) + amount;
+            if (s.churchOfferings.n < MAX) {
+              s.churchOfferings.n++;
+              s.changeAura(PENALTIES.offeringAura, 'Hai fatto un\'offerta in chiesa', true);
+              render(`<p class="ok">Grazie per la tua offerta di ${formatMoney(amount)}. (+1 Aura)</p>`);
+            } else {
+              s.changeHappiness(1, 'Offerta in chiesa');
+              render(`<p class="ok">Grazie per la tua generosità (${formatMoney(amount)}). Oggi hai già ricevuto il massimo di Aura dalle offerte.</p>`);
+            }
+            this.refreshWallet();
+          },
+        },
+      });
+    };
+    render();
+  }
+
   /* ---------- Spacciatore nel vicolo (solo contanti) ---------- */
   dealerShop(dealer) {
     const g = this.game;
@@ -518,12 +582,28 @@ export class Dialogs {
           <button class="btn-solid small" data-act="fix" data-uid="${v.uid}">Ripara · ${formatMoney(cost)}</button>
         </div>`;
       }).join('') || '<p class="muted">Tutti i tuoi veicoli sono in perfette condizioni.</p>';
+      // Veicoli portati qui dal carro attrezzi dopo un incidente con ricovero: si ritirano riparati pagando
+      const towed = g.state.impound.map((t, i) => `<div class="shop-row">
+          <div class="shop-icon">🚚</div>
+          <div class="shop-info"><b>${esc(t.name)}</b><span>Recuperato dal carro attrezzi dopo l'incidente: riparato e pronto davanti all'officina.</span></div>
+          <button class="btn-solid small" data-act="redeem" data-i="${i}">Ritira · ${formatMoney(t.cost)}</button>
+        </div>`).join('');
       this.show({
         title: 'Officina · accettazione',
         subtitle: 'Il meccanico ripara carrozzeria e motore: il veicolo torna come nuovo ovunque sia parcheggiato.',
-        body: this.payToggleHtml() + msg + `<div class="shop-list">${rows}</div>`,
+        body: this.payToggleHtml() + msg + (towed ? `<div class="shop-section">Veicoli in deposito (incidenti)</div><div class="shop-list">${towed}</div><div class="shop-section">Riparazioni</div>` : '') + `<div class="shop-list">${rows}</div>`,
         handlers: {
           pay: (d) => { this.payMethod = d.m; render(); },
+          redeem: (d) => {
+            const t = g.state.impound[Number(d.i)];
+            if (!t) return;
+            if (!g.state.payWith(t.cost, this.payMethod)) { render('<p class="warn">Fondi insufficienti.</p>'); return; }
+            g.redeemImpounded(Number(d.i));
+            audio.cash();
+            audio.impactWrench();
+            render(`<p class="ok">${esc(t.name)} è pronto davanti all'officina, come nuovo.</p>`);
+            this.refreshWallet();
+          },
           fix: (d) => {
             const v = g.vehicles.list.find((x) => x.uid === d.uid);
             if (!v) return;
